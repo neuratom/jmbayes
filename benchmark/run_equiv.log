@@ -1,0 +1,9 @@
+== R
+k=1 n=312  separate fits 21.5s  jm() 1222.4s (MCMC 810.7s)
+== Python seed 123
+MCMC: 12 chains, 30000 iterations, burn-in 5000, thin 1, 213.4s
+saved PY_eq_seed123.json
+== Python seed 456
+MCMC: 12 chains, 30000 iterations, burn-in 5000, thin 1, 214.9s
+saved PY_eq_seed456.json
+DONE

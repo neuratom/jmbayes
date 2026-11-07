@@ -1,0 +1,21 @@
+
+model 'splines': 1 R run(s), 2 Python runs, calibration k = 1.00
+
+block    parameter                           R     Python    d/SD      z  TOST0.2
+gammas   sexfemale                     -0.1961    -0.1950   0.004   0.48      yes
+alphas   value(log(serBilir))           1.2975     1.2953  -0.023  -1.08      yes
+betas1   (Intercept)                    0.6696     0.6699   0.002   0.28      yes
+betas1   ns(year, 2)1                   2.3627     2.3709   0.046   1.84      yes
+betas1   ns(year, 2)2                   2.2247     2.2425   0.063   1.73      yes
+betas1   sexfemale                     -0.1785    -0.1791  -0.004  -0.54      yes
+sigmas   sigma_1                        0.3018     0.3017  -0.009  -0.72      yes
+D        D[1, 1]                        1.0039     1.0057   0.018   1.72      yes
+D        D[2, 1]                        0.7358     0.7475   0.059   2.23      yes
+D        D[3, 1]                        0.6184     0.6356   0.056   1.37      yes
+D        D[2, 2]                        5.1355     5.1901   0.078   2.66      yes
+D        D[3, 2]                        2.4523     2.5081   0.075   1.85      yes
+D        D[3, 3]                        4.8731     4.9031   0.029   0.77      yes
+
+median |R - Python| = 0.029 SD (max 0.078); median |Python - Python| = 0.028 SD (max 0.053)
+|z| < 2: 85%   equivalent at ±0.2 SD: 13/13
+fit stats R: {'DIC': 6148.1, 'pD': 934.4, 'LPML': -3360.7, 'WAIC': 5887.4}  Python: {'DIC': np.float64(6146.7), 'pD': np.float64(933.4), 'LPML': np.float64(-3350.7), 'WAIC': np.float64(5886.3)}

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jmbayes2py"
+version = "0.4.0"
+description = "Bayesian joint models for longitudinal and time-to-event data: a Python/PyTorch implementation of JMbayes2 (CPU or GPU)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Neuratom" }]
+dependencies = ["numpy", "scipy", "pandas", "statsmodels", "torch"]
+
+[project.optional-dependencies]
+dev = ["pytest", "pyreadr", "matplotlib", "reportlab", "psutil", "pypdfium2"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["jmbayes2py", "jmbayes2py.data"]
+
+[tool.setuptools.package-data]
+"jmbayes2py.data" = ["*.csv.gz"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

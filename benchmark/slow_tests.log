@@ -1,0 +1,12 @@
+.....                                                                    [100%]
+============================== warnings summary ===============================
+tests/test_features.py::test_feature_equivalence_with_jmbayes2[nhc]
+  C:\Users\mo\Documents\Organisations\Neuratom\Repos\JMbayes2\jmbayes2py\src\jmbayes2py\fits.py:39: ConvergenceWarning: The MLE may be on the boundary of the parameter space.
+    res = model.fit(reml=True, method=method, free=free)
+
+tests/test_predict.py::test_prediction_engine_matches_jmbayes2
+  C:\Users\mo\Documents\Organisations\Neuratom\Repos\JMbayes2\jmbayes2py\src\jmbayes2py\prediction.py:162: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\torch\csrc\utils\tensor_numpy.cpp:209.)
+    sid=torch.as_tensor(np.asarray(L["sid"]), device=self.dev))
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+5 passed, 19 deselected, 2 warnings in 364.06s (0:06:04)

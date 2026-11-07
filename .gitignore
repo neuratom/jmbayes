@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.egg-info/
+*.json
+!benchmark/*.json
+!tests/*.json
+.pytest_cache/
+*.jmb

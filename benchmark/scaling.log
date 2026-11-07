@@ -1,0 +1,13 @@
+R          patients=  312 iters=  3500  wall    94.1s  MCMC    54.6s  peak RAM  1.28 GB
+Python-GPU patients=  312 iters=  3500  wall    53.1s  MCMC    22.0s  peak RAM  1.22 GB
+R          patients=  624 iters=  3500  wall   158.9s  MCMC    87.0s  peak RAM  1.45 GB
+Python-GPU patients=  624 iters=  3500  wall    89.7s  MCMC    24.4s  peak RAM  1.22 GB
+R          patients= 1560 iters=  3500  wall   301.2s  MCMC   157.4s  peak RAM  1.95 GB
+Python-GPU patients= 1560 iters=  3500  wall    95.0s  MCMC    32.5s  peak RAM  1.22 GB
+R          patients= 3120 iters=  3500  wall   415.4s  MCMC   202.2s  peak RAM  2.41 GB
+Python-GPU patients= 3120 iters=  3500  wall   175.6s  MCMC    46.4s  peak RAM  1.24 GB
+R          patients= 1560 iters=  7000  wall   335.0s  MCMC   236.8s  peak RAM  2.34 GB
+Python-GPU patients= 1560 iters=  7000  wall   220.3s  MCMC    66.0s  peak RAM  1.23 GB
+R          patients= 1560 iters= 14000  wall   919.4s  MCMC   716.4s  peak RAM  3.36 GB
+Python-GPU patients= 1560 iters= 14000  wall   288.0s  MCMC   132.8s  peak RAM  1.24 GB
+R          patients= 1560 iters= 28000  wall  1333.4s  MCMC  1045.8s  peak RAM  6.25 GB

@@ -1,0 +1,4 @@
+splines: jm() 4285.1s -> R_feature_splines_seed123.json
+splines: jm() 5140.3s -> R_feature_splines_seed456.json
+Error: unexpected ')' in " unname(coef(CoxFit)))"
+Execution halted

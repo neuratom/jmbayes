@@ -1,0 +1,13 @@
+== R x1
+k=1 n=312  separate fits 14.8s  jm() 64.4s (MCMC 58.5s)
+== Python GPU x1
+setup (initial fits + design matrices): 11.3s
+MCMC: 3 chains, 12000 iterations, burn-in 2000, thin 5, 77.4s
+saved PY_x1.json
+== R x10
+Execution halted
+== Python GPU x10
+setup (initial fits + design matrices): 283.0s
+MCMC: 3 chains, 12000 iterations, burn-in 2000, thin 5, 162.6s
+saved PY_x10.json
+DONE
