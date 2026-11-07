@@ -22,7 +22,7 @@ _LEVELS = {
 
 
 def _read(name: str) -> pd.DataFrame:
-    with resources.files("jmbayes2py.data").joinpath(name).open("rb") as f:
+    with resources.files("jmbayes.datasets").joinpath(name).open("rb") as f:
         d = pd.read_csv(f, compression="gzip")
     for col, levels in _LEVELS.items():
         if col in d:

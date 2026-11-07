@@ -31,7 +31,7 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture(scope="session")
 def pbc2_data():
-    import jmbayes2py as jmb
+    import jmbayes as jmb
     return jmb.datasets.pbc2()
 
 
@@ -44,7 +44,7 @@ README_MODELS = [
 
 def setup_args():
     """README models as jm_setup() input (long_models, surv), built via the public API."""
-    import jmbayes2py as jmb
+    import jmbayes as jmb
     mk = [jmb.Longitudinal(**m).to_marker() for m in README_MODELS]
     long_models = [dict(response=m.response, fixed=m.fixed, random=m.random, family=m.family)
                    for m in mk]

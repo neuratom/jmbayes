@@ -12,3 +12,7 @@
 {"impl": "Python-GPU", "k": 5, "patients": 1560, "n_iter": 14000, "wall_s": 288.0491313000002, "peak_ram_gb": 1.236348928, "setup_s": 151.31695089999994, "mcmc_s": 132.78421569999955, "jm_total_s": null, "gpu_peak_gb": 0.096172032}
 {"impl": "R", "k": 5, "patients": 1560, "n_iter": 28000, "wall_s": 1333.354859000001, "peak_ram_gb": 6.249869312, "setup_s": 127.17, "mcmc_s": 1045.78, "jm_total_s": 1204.76, "gpu_peak_gb": 0.0}
 {"impl": "Python-GPU", "k": 5, "patients": 1560, "n_iter": 28000, "wall_s": 332.25208199999906, "peak_ram_gb": 1.260171264, "setup_s": 60.33891159999621, "mcmc_s": 268.4079325999992, "jm_total_s": null, "gpu_peak_gb": 0.130583552}
+{"impl": "Python-GPU", "k": 6, "patients": 1872, "n_iter": 30000, "wall_s": 385.1072144999998, "peak_ram_gb": 1.267949568, "setup_s": 65.44334049999452, "mcmc_s": 316.4689839000057, "jm_total_s": null, "gpu_peak_gb": 0.143576064}
+{"impl": "Python-GPU", "k": 6, "patients": 1872, "n_iter": 90000, "wall_s": 1025.894049500006, "peak_ram_gb": 1.34995968, "setup_s": 64.77259390000108, "mcmc_s": 956.7540967000023, "jm_total_s": null, "gpu_peak_gb": 0.289469952}
+{"impl": "R", "k": 6, "patients": 1872, "n_iter": 30000, "wall_s": 1519.3854306999929, "peak_ram_gb": 7.938912256, "setup_s": 154.95, "mcmc_s": 1272.6, "jm_total_s": 1363.05, "gpu_peak_gb": 0.0}
+{"impl": "Python-GPU", "k": 10, "patients": 3120, "n_iter": 7000, "wall_s": 223.88846449999255, "peak_ram_gb": 1.239441408, "setup_s": 127.13910119999491, "mcmc_s": 93.8115087000042, "jm_total_s": null, "gpu_peak_gb": 0.1172608}

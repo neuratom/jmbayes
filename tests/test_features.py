@@ -5,8 +5,8 @@ import pathlib
 import numpy as np
 import pytest
 
-import jmbayes2py as jmb
-from jmbayes2py.splines import SplineSpec
+import jmbayes as jmb
+from jmbayes.splines import SplineSpec
 
 HERE = pathlib.Path(__file__).resolve().parent
 

@@ -1,4 +1,4 @@
-# Reference run: the README joint model in JMbayes2 (R), for comparison with jmbayes2py.
+# Reference run: the README joint model in JMbayes2 (R), for comparison with jmbayes.
 # Usage: Rscript run_pbc2_R.R <replicate_factor> <out.json>
 args <- commandArgs(trailingOnly = TRUE)
 k <- as.integer(args[1]); out_file <- args[2]

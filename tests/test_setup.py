@@ -2,10 +2,10 @@
 import numpy as np
 import pytest
 
-from jmbayes2py import formula as fm
-from jmbayes2py.design import Response, as_terms, ns, var
-from jmbayes2py.fits import fit_coxph
-from jmbayes2py.model import jm_setup
+from jmbayes import formula as fm
+from jmbayes.design import Response, as_terms, ns, var
+from jmbayes.fits import fit_coxph
+from jmbayes.model import jm_setup
 
 from conftest import README_MODELS, ref, setup_args
 

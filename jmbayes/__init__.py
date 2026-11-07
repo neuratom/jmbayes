@@ -1,10 +1,10 @@
-"""jmbayes2py: Bayesian joint models for longitudinal and time-to-event data.
+"""jmbayes: Bayesian joint models for longitudinal and time-to-event data.
 
 A Python/PyTorch implementation of the R package JMbayes2 (Rizopoulos, Papageorgiou,
 Miranda Afonso): same model, same priors, same MCMC algorithm; runs on CPU or GPU.
 
-    import jmbayes2py as jmb
-    from jmbayes2py import var
+    import jmbayes as jmb
+    from jmbayes import var
 
     visits, patients = jmb.datasets.pbc2()
     year, sex = var("year"), var("sex")
@@ -17,11 +17,12 @@ Miranda Afonso): same model, same priors, same MCMC algorithm; runs on CPU or GP
 
 R-style formula strings work too: jmb.jm(jmb.Survival(...), jmb.Longitudinal(...), ...).
 """
-from jmbayes2py import datasets
-from jmbayes2py.api import (Event, JointModel, JointModelFit, Longitudinal, Marker, Survival,
+from jmbayes import datasets
+from jmbayes.api import (Event, JointModel, JointModelFit, Longitudinal, Marker, Survival,
                             jm, load)
-from jmbayes2py.design import bs, ns, var
+from jmbayes.checks import DataError
+from jmbayes.design import bs, ns, var
 
 __all__ = ["JointModel", "Marker", "Event", "var", "ns", "bs",
-           "jm", "Longitudinal", "Survival", "JointModelFit", "load", "datasets"]
-__version__ = "0.4.0"
+           "jm", "Longitudinal", "Survival", "JointModelFit", "load", "datasets", "DataError"]
+__version__ = "0.5.0"

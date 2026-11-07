@@ -4,7 +4,7 @@ import pathlib
 import time
 
 import numpy as np
-import jmbayes2py as jmb
+import jmbayes as jmb
 
 HERE = pathlib.Path(__file__).resolve().parent
 pbc2, pid = jmb.datasets.pbc2()

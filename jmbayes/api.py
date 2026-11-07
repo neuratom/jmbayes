@@ -2,8 +2,8 @@
 
 Python objects (main interface):
 
-    import jmbayes2py as jmb
-    from jmbayes2py import var
+    import jmbayes as jmb
+    from jmbayes import var
 
     visits, patients = jmb.datasets.pbc2()
     year, sex = var("year"), var("sex")
@@ -31,11 +31,12 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from jmbayes2py import formula as fm
-from jmbayes2py import summary as sm
-from jmbayes2py.design import Response, Terms, as_terms
-from jmbayes2py.model import ModelData, jm_setup
-from jmbayes2py.sampler import JointModelSampler
+from jmbayes import checks as ck
+from jmbayes import formula as fm
+from jmbayes import summary as sm
+from jmbayes.design import Response, Terms, as_terms
+from jmbayes.model import ModelData, jm_setup
+from jmbayes.sampler import JointModelSampler
 
 _FAMILIES = {"gaussian", "binomial"}
 _FORMS = ("value", "slope", "area")
@@ -197,10 +198,15 @@ class Survival:
 
 def _check_event(df, col):
     if col not in df:
-        raise KeyError(f"event column '{col}' not found in the patients data")
+        raise ck.DataError(f"event column '{col}' not found in the patients data")
     if not set(pd.unique(df[col].dropna())) <= {0, 1}:
-        raise ValueError(f"event column '{col}' must be coded 0/1 "
-                         "(e.g. create it with (df.status != 'alive').astype(int))")
+        raise ck.DataError(f"event column '{col}' must be coded 0/1 "
+                           "(e.g. create it with (df.status != 'alive').astype(int))")
+
+
+def _marker_specs(model):
+    return [(m.response, [*m.fixed.variables(), *m.random.variables()], m.family)
+            for m in model.markers]
 
 
 @dataclass
@@ -281,7 +287,7 @@ class JointModelFit:
         md, s = self.md, self.settings
         out = {"survival": self.survival_table(), "hazard_ratios": self.hazard_ratios(),
                "D": self.random_effects_covariance()}
-        print(f"\nJoint model fitted with jmbayes2py (Python port of JMbayes2)")
+        print(f"\nJoint model fitted with jmbayes (Python port of JMbayes2)")
         print(f"Patients: {md.n}   events: {int(md.event.sum())} "
               f"({100 * md.event.mean():.1f}%)")
         for o in md.outcomes:
@@ -332,14 +338,14 @@ class JointModelFit:
         draws:   "spread" (default) takes draws evenly over all chains; "first" takes
                  the first n_samples draws, exactly as JMbayes2 does.
         """
-        from jmbayes2py.prediction import predict as _predict
+        from jmbayes.prediction import predict as _predict
         return _predict(self, newdata, process=process, times=times, n_samples=n_samples,
                         n_mcmc=n_mcmc, level=level, seed=seed, device=device, type=type,
                         draws=draws)
 
     # ---- persistence -----------------------------------------------------------
     def save(self, path: str) -> None:
-        """Save the fitted model to a file (reload with jmbayes2py.load)."""
+        """Save the fitted model to a file (reload with jmbayes.load)."""
         with open(path, "wb") as f:
             pickle.dump(self, f)
 
@@ -349,14 +355,14 @@ def load(path: str) -> JointModelFit:
     with open(path, "rb") as f:
         obj = pickle.load(f)
     if not isinstance(obj, JointModelFit):
-        raise TypeError(f"{path} does not contain a jmbayes2py fit")
+        raise TypeError(f"{path} does not contain a jmbayes fit")
     _upgrade(obj.md)
     return obj
 
 
 def _upgrade(md: ModelData) -> None:
     """Fits saved by version 0.3 stored formulas as strings; convert them to terms."""
-    from jmbayes2py.design import SplineBasis
+    from jmbayes.design import SplineBasis
     for o in md.outcomes:
         if getattr(o, "fixed", None) is not None:
             continue
@@ -438,14 +444,10 @@ def jm(survival: Survival, longitudinal: list[Longitudinal] | Longitudinal,
 
 def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_chains, seed,
          device, base_hazard_segments, Bsplines_degree, initial_fits, verbose):
-    for df, what in ((visits, "visits"), (patients, "patients")):
-        if model.id not in df:
-            raise KeyError(f"id column '{model.id}' not found in the {what} data")
-    if model.time not in visits:
-        raise KeyError(f"time column '{model.time}' not found in the visits data")
-    if model.event.time not in patients:
-        raise KeyError(f"time column '{model.event.time}' not found in the patients data")
-    _check_event(patients, model.event.event)
+    ck.check_patients(patients, model.id, model.event.time, model.event.event,
+                      model.event.covariates.variables())
+    ck.check_visits(visits, model.id, model.time, _marker_specs(model))
+    ck.check_same_patients(visits, patients, model.id)
     if n_iter is not None and n_burnin >= n_iter:
         raise ValueError("n_burnin must be smaller than n_iter")
     if n_iter is not None and n_iter <= 100:

@@ -15,8 +15,8 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import BSpline
 
-from jmbayes2py import design as dz
-from jmbayes2py.fits import MixedFit, fit_coxph, fit_glmm_binomial, fit_lme
+from jmbayes import design as dz
+from jmbayes.fits import MixedFit, fit_coxph, fit_glmm_binomial, fit_lme
 
 # Gauss-Kronrod 15-point rule, same order as gaussKronrod() in help_functions.R
 GK_SK = np.array([-0.949107912342758, -0.741531185599394, -0.405845151377397,

@@ -1,4 +1,4 @@
-"""MCMC sampler: a PyTorch port of mcmc_cpp() in src/mcmc_fit.cpp.
+"""MCMC sampler: a PyTorch port of mcmc_cpp() in JMbayes2's src/mcmc_fit.cpp.
 
 Same algorithm as JMbayes2, step for step:
   per iteration -> bs_gammas (one-at-a-time MH), tau_bs_gammas (Gibbs),
@@ -29,7 +29,7 @@ import time as _time
 import numpy as np
 import torch
 
-from jmbayes2py.model import ModelData
+from jmbayes.model import ModelData
 
 LOG2PI = math.log(2 * math.pi)
 CONST_UNIF = 0.5 * math.sqrt(12.0)

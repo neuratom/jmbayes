@@ -184,7 +184,7 @@ def as_terms(x) -> Terms:
     if isinstance(x, Terms):
         return x
     if isinstance(x, str):
-        from jmbayes2py.formula import parse_rhs
+        from jmbayes.formula import parse_rhs
         return Terms(parse_rhs(x).terms)
     if isinstance(x, int) and not isinstance(x, bool) and x == 1:
         return Terms(())
@@ -219,7 +219,7 @@ def _is_categorical(series: pd.Series) -> bool:
 def _factor_columns(df: pd.DataFrame, f, levels: dict):
     """Columns (name, values) contributed by one factor (treatment coding for categories)."""
     if isinstance(f, SplineBasis):
-        from jmbayes2py.splines import SplineSpec
+        from jmbayes.splines import SplineSpec
         if f not in levels:                      # knots fixed on the fitting data
             levels[f] = SplineSpec.fit(f.kind, df[f.var].to_numpy(float), f.df)
         B = levels[f].basis(df[f.var].to_numpy(float))

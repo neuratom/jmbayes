@@ -1,5 +1,5 @@
 # Export the separate fits that jm() starts from (README model on pbc2), so that
-# jmbayes2py can be run with exactly the same starting values and prior centres.
+# jmbayes can be run with exactly the same starting values and prior centres.
 # Usage: Rscript export_initfits.R R_initfits.json
 args <- commandArgs(trailingOnly = TRUE)
 suppressPackageStartupMessages({library(JMbayes2); library(jsonlite)})

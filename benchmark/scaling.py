@@ -1,4 +1,4 @@
-"""Scaling benchmark: JMbayes2 (R) vs jmbayes2py (Python, GPU).
+"""Scaling benchmark: JMbayes2 (R) vs jmbayes (Python, GPU).
 
 Runs each job as its own process, one at a time, and samples the resident memory
 of the whole process tree every 0.2 s (R starts one worker process per chain,
@@ -6,11 +6,13 @@ so all of them are counted). Python also reports peak GPU memory.
 
 Grid
   patients:   pbc2 copied 1, 2, 5, 10 times (312 .. 3,120 patients), 3,500 iterations
-  iterations: 3,500 .. 28,000 iterations at 5 copies (1,560 patients)
-  long runs:  30,000 and 90,000 iterations at 6 copies (1,872 patients, ~2,000 as in practice)
+  iterations: 3,500 .. 90,000 iterations at 5 and 10 copies (1,560 and 3,120 patients)
 Every job uses 3 chains, burn-in 500, thinning 5 (JMbayes2's defaults except n_iter).
 
 Usage: python scaling.py            (appends to scaling_results.jsonl, skips done jobs)
+
+Each finished job is saved at once. To pause between jobs, create a file named PAUSE in
+this folder; delete it and run the script again to continue where it stopped.
 """
 import json
 import pathlib
@@ -25,8 +27,10 @@ PY = str(HERE.parent / ".venv" / "Scripts" / "python.exe")
 OUT = HERE / "scaling_results.jsonl"
 ENV = dict(**__import__("os").environ, R_LIBS_USER="C:/Users/mo/R/win-library/4.6")
 
-GRID = ([(k, 3500) for k in (1, 2, 5, 10)] + [(5, n) for n in (7000, 14000, 28000)]
-        + [(6, 30000), (6, 90000)])
+GRID = ([(k, 3500) for k in (1, 2, 5, 10)]
+        + [(10, n) for n in (7000, 14000, 28000, 60000, 90000)]
+        + [(5, n) for n in (7000, 14000, 28000, 60000, 90000)])
+R_SKIP = set()               # jobs not run in R (none: R's memory growth is measured)
 BURNIN = 500
 
 
@@ -65,8 +69,11 @@ def main():
             done.add((r["impl"], r["k"], r["n_iter"]))
     for impl in ("Python-GPU", "R"):              # Python first: its jobs are short
         for k, n_iter in GRID:
-            if (impl, k, n_iter) in done:
+            if (impl, k, n_iter) in done or (impl == "R" and (k, n_iter) in R_SKIP):
                 continue
+            if (HERE / "PAUSE").exists():
+                print("paused (delete benchmark/PAUSE and rerun to continue)", flush=True)
+                return
             res_file = HERE / f"scal_{impl}_k{k}_it{n_iter}.json"
             if impl == "R":
                 cmd = [RSCRIPT, str(HERE / "run_pbc2_R.R"), str(k), str(res_file),

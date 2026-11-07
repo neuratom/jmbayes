@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from jmbayes2py.model import (GK_SK, GK_WK, TimeDesigner, _bspline_basis,
+from jmbayes.model import (GK_SK, GK_WK, TimeDesigner, _bspline_basis,
                               fill_within_subject)
 
 LOG2PI = math.log(2 * math.pi)
@@ -269,9 +269,12 @@ def predict(fit, newdata: pd.DataFrame, process: str = "event", times=None,
             draws: str = "spread", r_sampling: bool = False) -> pd.DataFrame:
     md = fit.md
     sv = md.meta["surv"]
-    for col in (md.meta["id_var"], md.meta["time_var"], sv["time"], sv["event"]):
-        if col not in newdata:
-            raise ValueError(f"newdata needs a column '{col}'")
+    from jmbayes import checks as ck
+    ck._missing_report(newdata, [md.meta["id_var"], md.meta["time_var"], sv["time"],
+                                 sv["event"], *sv["covariates"].variables()], "newdata")
+    ck.check_visits(newdata, md.meta["id_var"], md.meta["time_var"],
+                    [(o.response, [*o.fixed.variables(), *o.random.variables()], o.family)
+                     for o in md.outcomes], "newdata", require_measured=False)
     draws, S = _posterior_draws(fit, n_samples, draws)
     last_times = (newdata.groupby(md.meta["id_var"], sort=False)[sv["time"]].last()
                   .astype(float).to_numpy())

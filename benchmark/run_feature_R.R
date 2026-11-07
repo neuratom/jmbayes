@@ -1,4 +1,4 @@
-# Reference fits in JMbayes2 for the feature tests of jmbayes2py.
+# Reference fits in JMbayes2 for the feature tests of jmbayes.
 # Usage: Rscript run_feature_R.R <model> <out.json> [n_iter n_burnin n_chains seed]
 # Models (same definitions as tests/feature_models.py):
 #   nhc     fixed effects without a matching random effect (random intercept only)

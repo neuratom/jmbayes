@@ -6,7 +6,7 @@ import math
 import numpy as np
 import torch
 
-from jmbayes2py.model import ModelData
+from jmbayes.model import ModelData
 
 
 # ---- coda-style diagnostics ---------------------------------------------------

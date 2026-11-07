@@ -3,7 +3,7 @@
 Inputs (all in this folder):
   R_x1.json, PY_x1.json, PY_x1_seed456.json   README model on pbc2, 12000 iterations
   scaling_results.jsonl                        time / RAM sweep (scaling.py)
-Output: jmbayes2py_vs_JMbayes2.pdf
+Output: jmbayes_vs_JMbayes2.pdf
 """
 import json
 import math
@@ -37,7 +37,7 @@ _ap.add_argument("--settings", default="12 chains, 30,000 iterations per chain, 
                                        "no thinning (300,000 retained draws per program)")
 _ap.add_argument("--py-rinit", default="PY_eqRinit_seed123.json")
 _ap.add_argument("--py2-rinit", default="PY_eqRinit_seed456.json")
-_ap.add_argument("--out", default="jmbayes2py_vs_JMbayes2.pdf")
+_ap.add_argument("--out", default="jmbayes_vs_JMbayes2.pdf")
 ARGS = _ap.parse_args()
 R = json.load(open(HERE / ARGS.r))
 P = json.load(open(HERE / ARGS.py))
@@ -194,7 +194,7 @@ def fig_forest():
     fig, ax = plt.subplots(figsize=(7.2, 3.0))
     ys = np.arange(len(SURV_NAMES))[::-1]
     for off, rows, col, lab in ((0.14, r_surv, C_R, "JMbayes2 (R)"),
-                                (-0.14, p_surv, C_PY, "jmbayes2py (Python)")):
+                                (-0.14, p_surv, C_PY, "jmbayes (Python)")):
         for y, nm in zip(ys, SURV_NAMES):
             r = rows[nm]
             ax.plot([math.exp(r["2.5%"]), math.exp(r["97.5%"])], [y + off] * 2, color=col, lw=2,
@@ -331,7 +331,7 @@ n_conc = len(CONC)
 n_same = sum(c["same_sign"] and c["same_sig"] and c["same_ci0"] for c in CONC)
 
 story = []
-story.append(Paragraph("Statistical equivalence of jmbayes2py and JMbayes2", H1))
+story.append(Paragraph("Statistical equivalence of jmbayes and JMbayes2", H1))
 story.append(Paragraph(
     "Joint model for longitudinal and time-to-event data, ported from the R package JMbayes2 "
     "(v0.6-5) to Python/PyTorch. Same model, same priors and same MCMC algorithm; it runs on "
@@ -396,7 +396,7 @@ story.append(Paragraph(
     "(linear mixed models, random intercept and slope) and ascites (logistic mixed model, "
     f"random intercept and slope). MCMC: {ARGS.settings}, identical in both programs. "
     "The R model was fitted with <font face='Courier'>jm()</font>; the Python model "
-    "with <font face='Courier'>jmbayes2py</font>, using its own versions of the separate "
+    "with <font face='Courier'>jmbayes</font>, using its own versions of the separate "
     "starting fits (lme, mixed_model, coxph).", BODY))
 
 # ---- Section 1: agreement
@@ -652,7 +652,7 @@ def footer(canvas, doc):
     canvas.saveState()
     canvas.setFont("Helvetica", 7.5)
     canvas.setFillColor(colors.HexColor(INK2))
-    canvas.drawString(1.8 * cm, 1.1 * cm, "jmbayes2py vs JMbayes2 - agreement and performance")
+    canvas.drawString(1.8 * cm, 1.1 * cm, "jmbayes vs JMbayes2 - agreement and performance")
     canvas.drawRightString(A4[0] - 1.8 * cm, 1.1 * cm, f"Page {doc.page}")
     canvas.restoreState()
 
@@ -660,6 +660,6 @@ def footer(canvas, doc):
 out = HERE / ARGS.out
 SimpleDocTemplate(str(out), pagesize=A4, leftMargin=1.8 * cm, rightMargin=1.8 * cm,
                   topMargin=1.6 * cm, bottomMargin=1.8 * cm,
-                  title="jmbayes2py vs JMbayes2").build(story, onFirstPage=footer,
+                  title="jmbayes vs JMbayes2").build(story, onFirstPage=footer,
                                                          onLaterPages=footer)
 print(f"wrote {out}")

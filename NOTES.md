@@ -1,4 +1,4 @@
-# jmbayes2py: JMbayes2 in Python / PyTorch
+# jmbayes: JMbayes2 in Python / PyTorch
 
 A Python port of JMbayes2's joint model for longitudinal and time-to-event data.
 It uses the same model, the same priors and the same MCMC algorithm, and runs on CPU or GPU.
@@ -7,7 +7,7 @@ R is only needed to compare results.
 ## Run
 
 The venv lives in `.venv` (Python 3.11, PyTorch with CUDA). The package is installed
-into it in editable mode (`pip install -e .`), so `from jmbayes2py.sampler import JointModelSampler`
+into it in editable mode (`pip install -e .`), so `from jmbayes.sampler import JointModelSampler`
 works from anywhere with that interpreter.
 
 ```
@@ -19,7 +19,7 @@ To recreate the venv:
 
 ```
 py -3.11 -m venv .venv
-.venv/Scripts/python -m pip install torch --index-url https://download.pytorch.org/whl/cu124
+.venv/Scripts/python -m pip install torch   (PyTorch build for your CUDA version: see the README)
 .venv/Scripts/python -m pip install -e .
 ```
 
@@ -27,15 +27,15 @@ py -3.11 -m venv .venv
 
 | File | Ports | What it does |
 |---|---|---|
-| `src/jmbayes2py/api.py` | `jm()`, `summary()`, `predict()` | User-facing interface (`JointModel`/`Marker`/`Event`, and the R-style `jm()`) and result object |
-| `src/jmbayes2py/design.py` | R `model.matrix()` | Model terms as Python objects (`var`, `+`, `*`, `&`, `.ns()`), design matrices with R's column names and order |
-| `src/jmbayes2py/formula.py` | R formulas | Parses R-style formula strings into the same term objects |
-| `src/jmbayes2py/splines.py` | `splines::ns()`, `bs()` | R-identical spline bases (LINPACK QR reproduced) |
-| `src/jmbayes2py/fits.py` | `lme()`, `mixed_model()`, `coxph()` | Initial fits that JMbayes2 starts from (REML LMM, ML binomial GLMM with 11-point adaptive Gauss-Hermite, Cox with Efron ties) |
-| `src/jmbayes2py/model.py` | `jm()`, `jm_fit()` set-up | Quadrature, B-spline baseline hazard, association designs (value/slope/area), centring, hierarchical-centering blocks, priors, starting values |
-| `src/jmbayes2py/sampler.py` | `mcmc_cpp()` and the update headers | The MCMC, step for step |
-| `src/jmbayes2py/summary.py` | `jm_fit()` post-processing, `fit_stats()` | Means, SDs, intervals, tail probabilities, Rhat (coda formula), ESS (JMbayes2's AR estimate), DIC/WAIC/LPML |
-| `src/jmbayes2py/prediction.py` | `predict.jm()`, `simulate_REs()`, `logLik_Event()` | Dynamic predictions of event risk and marker values |
+| `jmbayes/api.py` | `jm()`, `summary()`, `predict()` | User-facing interface (`JointModel`/`Marker`/`Event`, and the R-style `jm()`) and result object |
+| `jmbayes/design.py` | R `model.matrix()` | Model terms as Python objects (`var`, `+`, `*`, `&`, `.ns()`), design matrices with R's column names and order |
+| `jmbayes/formula.py` | R formulas | Parses R-style formula strings into the same term objects |
+| `jmbayes/splines.py` | `splines::ns()`, `bs()` | R-identical spline bases (LINPACK QR reproduced) |
+| `jmbayes/fits.py` | `lme()`, `mixed_model()`, `coxph()` | Initial fits that JMbayes2 starts from (REML LMM, ML binomial GLMM with 11-point adaptive Gauss-Hermite, Cox with Efron ties) |
+| `jmbayes/model.py` | `jm()`, `jm_fit()` set-up | Quadrature, B-spline baseline hazard, association designs (value/slope/area), centring, hierarchical-centering blocks, priors, starting values |
+| `jmbayes/sampler.py` | `mcmc_cpp()` and the update headers | The MCMC, step for step |
+| `jmbayes/summary.py` | `jm_fit()` post-processing, `fit_stats()` | Means, SDs, intervals, tail probabilities, Rhat (coda formula), ESS (JMbayes2's AR estimate), DIC/WAIC/LPML |
+| `jmbayes/prediction.py` | `predict.jm()`, `simulate_REs()`, `logLik_Event()` | Dynamic predictions of event risk and marker values |
 
 ## What is the same as JMbayes2
 

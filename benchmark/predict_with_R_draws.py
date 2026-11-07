@@ -9,7 +9,7 @@ import pathlib
 
 import numpy as np
 
-import jmbayes2py as jmb
+import jmbayes as jmb
 
 HERE = pathlib.Path(__file__).resolve().parent
 fit = jmb.load(str(HERE / "PY_readme_fit.jmb"))

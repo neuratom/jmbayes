@@ -6,3 +6,5 @@ __pycache__/
 !tests/*.json
 .pytest_cache/
 *.jmb
+benchmark/PAUSE
+build/

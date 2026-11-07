@@ -1,0 +1,1 @@
+{"impl": "Python-GPU", "k": 10, "patients": 3120, "n_iter": 14000, "wall_s": 1890.2837847000046, "peak_ram_gb": 1.76515072, "setup_s": 204.7662707999989, "mcmc_s": 1682.5098187000112, "jm_total_s": null, "gpu_peak_gb": 0.134352896}

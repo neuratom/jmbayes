@@ -4,8 +4,8 @@ import copy
 import numpy as np
 import pytest
 
-import jmbayes2py as jmb
-from jmbayes2py.prediction import predict
+import jmbayes as jmb
+from jmbayes.prediction import predict
 
 from conftest import README_MODELS, ref
 

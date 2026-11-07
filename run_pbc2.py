@@ -17,12 +17,12 @@ import pathlib
 import time
 
 import pandas as pd
-import jmbayes2py as jmb
-from jmbayes2py import var
+import jmbayes as jmb
+from jmbayes import var
 
-from jmbayes2py.model import jm_setup
-from jmbayes2py.sampler import JointModelSampler
-from jmbayes2py import summary as sm
+from jmbayes.model import jm_setup
+from jmbayes.sampler import JointModelSampler
+from jmbayes import summary as sm
 
 HERE = pathlib.Path(__file__).resolve().parent
 

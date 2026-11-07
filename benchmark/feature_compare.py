@@ -1,4 +1,4 @@
-"""Compare jmbayes2py with JMbayes2 on the feature models (see run_feature_R.R).
+"""Compare jmbayes with JMbayes2 on the feature models (see run_feature_R.R).
 
 Usage: python feature_compare.py <model> [--runs 2]
 Runs Python with the same MCMC settings as the R reference (two seeds), then reports,
@@ -13,7 +13,7 @@ import pathlib
 import numpy as np
 from scipy.stats import norm
 
-import jmbayes2py as jmb
+import jmbayes as jmb
 
 HERE = pathlib.Path(__file__).resolve().parent
 

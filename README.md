@@ -1,38 +1,70 @@
-# jmbayes2py
+# jmbayes
 
 Bayesian joint models for longitudinal and time-to-event data in Python and PyTorch,
 based on the R package [JMbayes2](https://github.com/drizopoulos/JMbayes2) by
 Rizopoulos, Papageorgiou and Miranda Afonso. It fits the same model, with the same priors
 and the same MCMC algorithm, so it gives the same results within Monte Carlo error. It is
-also much faster and runs in constant memory.
+also much faster and needs far less memory.
 
-* **Constant memory.** Memory use does not grow with the number of iterations or
-  patients: about 1.2 GB of RAM in every run we measured, and at most 0.11 GB of GPU
-  memory. JMbayes2's memory grows with run length (6.2 GB at 28,000 iterations for
-  1,560 patients), so long runs on large cohorts exceed a 16 GB machine. jmbayes2py
-  runs them on a laptop or a small GPU.
+* **Small, nearly flat memory use.** 1.2–1.4 GB of RAM and at most 0.3 GB of GPU memory in
+  every run we measured, up to 90,000 iterations. Only the kept posterior draws grow with
+  run length. JMbayes2's memory grows quickly with run length and cohort size (6.2 GB at
+  28,000 iterations for 1,560 patients), so long runs on large cohorts exceed a 16 GB
+  machine. jmbayes runs them on a laptop or a small GPU.
 * **Faster, and it scales better.** On a GPU the MCMC is 2.5× faster than JMbayes2 on
-  312 patients, and 4.4–5.4× faster on 1,560–3,120 patients and on longer runs. Adding
-  ten times the patients makes jmbayes2py's MCMC about 2× slower, and JMbayes2's about
-  3.7× slower (see [Benchmarks](#benchmarks)).
+  312 patients, and 3.9–5.4× faster on 1,560–3,120 patients and on longer runs. With ten
+  times the patients, the MCMC in jmbayes takes about 2× longer, and in JMbayes2 about
+  3.7× longer (see [Benchmarks](#benchmarks)).
 * **Same results.** It was checked against JMbayes2 on the same data and models. The
   estimates, hazard ratios, credible intervals and dynamic predictions agree with R
   more closely than two R runs agree with each other.
 
 ## Install
 
+jmbayes runs on any CPU, and on NVIDIA GPUs through PyTorch. Install PyTorch first, in
+the version that fits your machine, then this package.
+
+```
+git clone https://github.com/neuratom/jmbayes.git
+cd jmbayes
+```
+
+**With pip**
+
 ```
 python -m venv .venv
-.venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
-pip install torch --index-url https://download.pytorch.org/whl/cu124   # GPU (or: pip install torch)
+.venv\Scripts\activate             # macOS/Linux: source .venv/bin/activate
+pip install torch                  # see the note below for an NVIDIA GPU on Windows
 pip install -e .
 ```
+
+**With conda**
+
+```
+conda create -n jmbayes -c conda-forge python=3.11 pytorch numpy scipy pandas statsmodels
+conda activate jmbayes
+pip install --no-deps -e .
+```
+
+conda-forge picks a GPU build of PyTorch by itself when it finds an NVIDIA driver.
+
+**GPU note.** With pip on Linux, `pip install torch` already includes GPU support. On Windows
+it installs the CPU-only build, so use the command that the selector at
+[pytorch.org/get-started](https://pytorch.org/get-started/locally/) gives for your CUDA
+version (run `nvidia-smi` to see it). Check that the GPU is found:
+
+```
+python -c "import torch; print(torch.cuda.is_available())"
+```
+
+`False` is fine: everything runs on the CPU, just slower for large studies. Apple GPUs are
+not used, because the model needs 64-bit precision, which they do not support.
 
 ## Fit a model
 
 ```python
-import jmbayes2py as jmb
-from jmbayes2py import var
+import jmbayes as jmb
+from jmbayes import var
 
 visits, patients = jmb.datasets.pbc2()   # example data: visits, and one row per patient
 year, sex = var("year"), var("sex")
@@ -53,16 +85,16 @@ fit.summary()
 
 The model is the JMbayes2 README model: pbc2, three markers (log serum bilirubin,
 prothrombin time, ascites), replicated to get more patients. Each run uses 3 chains.
-JMbayes2 0.6-5 ran on the CPU; jmbayes2py ran on an RTX 3090.
+JMbayes2 0.6-5 ran on the CPU; jmbayes ran on an RTX 3090.
 
-![MCMC time and peak RAM of JMbayes2 and jmbayes2py](benchmark/figures/benchmarks.png)
+![MCMC time and peak RAM of JMbayes2 and jmbayes](benchmark/figures/benchmarks.png)
 
 The two programs agree. Hazard ratios from the same model, fitted by each program
 (posterior mean and 95% credible interval):
 
-![Hazard ratios from JMbayes2 and jmbayes2py](benchmark/figures/forest.png)
+![Hazard ratios from JMbayes2 and jmbayes](benchmark/figures/forest.png)
 
-| Patients | Iterations | JMbayes2: MCMC time | JMbayes2: peak RAM | jmbayes2py: MCMC time | jmbayes2py: peak RAM | Speed-up |
+| Patients | Iterations | JMbayes2: MCMC time | JMbayes2: peak RAM | jmbayes: MCMC time | jmbayes: peak RAM | Speed-up |
 |---:|---:|---:|---:|---:|---:|---:|
 | 312   | 3,500  | 55 s   | 1.28 GB | 22 s  | 1.22 GB | 2.5× |
 | 624   | 3,500  | 87 s   | 1.45 GB | 24 s  | 1.22 GB | 3.6× |
@@ -70,10 +102,10 @@ The two programs agree. Hazard ratios from the same model, fitted by each progra
 | 3,120 | 3,500  | 202 s  | 2.41 GB | 46 s  | 1.24 GB | 4.4× |
 | 1,560 | 7,000  | 237 s  | 2.34 GB | 66 s  | 1.23 GB | 3.6× |
 | 1,560 | 14,000 | 716 s  | 3.36 GB | 133 s | 1.24 GB | 5.4× |
-| 1,560 | 28,000 | 1,046 s | 6.25 GB | not run | constant by design | |
+| 1,560 | 28,000 | 1,046 s | 6.25 GB | 268 s | 1.26 GB | 3.9× |
 
 The full report, with equivalence tests, hazard ratios, credible intervals and scaling
-plots, is in [benchmark/jmbayes2py_vs_JMbayes2.pdf](benchmark/jmbayes2py_vs_JMbayes2.pdf).
+plots, is in [benchmark/jmbayes_vs_JMbayes2.pdf](benchmark/jmbayes_vs_JMbayes2.pdf).
 The scripts that reproduce it are in [benchmark/](benchmark/). The R scripts need
 JMbayes2 installed from CRAN, and are only used for the comparison.
 
@@ -130,6 +162,17 @@ patients = pd.read_csv("patients.csv")
 The first category of a text column is the reference group (alphabetical by default). To
 choose it: `patients["sex"] = pd.Categorical(patients["sex"], ["male", "female"])`.
 
+Time can be in any unit (days, months, years) and the column can have any name. Visit
+times and follow-up times must use the same unit, and effects of time are then per that
+unit.
+
+The data must be complete: jmbayes does not impute or drop anything for you. The one
+exception is an empty marker cell in the visits data, which means that marker was not
+measured at that visit (markers are often measured at different visits). Any other missing
+value stops the fit with a message naming the columns and the number of rows, as does
+invalid data (e.g. `log` of values <= 0, an event column not coded 0/1, or a patient in
+only one of the two tables).
+
 ## Options
 
 ```python
@@ -181,9 +224,12 @@ are in [NOTES.md](NOTES.md).
 
 ## Citation
 
-If you use jmbayes2py, please also cite JMbayes2:
+If you use jmbayes, please also cite JMbayes2:
 Rizopoulos D, Papageorgiou G, Miranda Afonso P. *JMbayes2: Extended Joint Models for
 Longitudinal and Time-to-Event Data*. R package, https://github.com/drizopoulos/JMbayes2.
+
+jmbayes is an independent reimplementation. It is not affiliated with or endorsed by the
+authors of the R packages JMbayes and JMbayes2.
 
 ## Licence
 

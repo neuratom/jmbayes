@@ -1,4 +1,4 @@
-"""Compare JMbayes2 (R) and jmbayes2py (Python) runs of the same model.
+"""Compare JMbayes2 (R) and jmbayes (Python) runs of the same model.
 
 Agreement is judged against Monte Carlo noise: for each parameter
     z = (mean_Python - mean_R) / sqrt(SE_R^2 + SE_Python^2)

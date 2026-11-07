@@ -7,9 +7,9 @@ import pytest
 import torch
 from scipy.special import logsumexp
 
-import jmbayes2py as jmb
-from jmbayes2py import summary as sm
-from jmbayes2py.sampler import JointModelSampler
+import jmbayes as jmb
+from jmbayes import summary as sm
+from jmbayes.sampler import JointModelSampler
 
 from conftest import README_MODELS, ref, setup_args
 

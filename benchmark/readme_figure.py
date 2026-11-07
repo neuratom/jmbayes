@@ -1,7 +1,10 @@
-"""Benchmark figure for the README: one grid, JMbayes2 (R) vs jmbayes2py (Python, GPU).
+"""Benchmark figure for the README: JMbayes2 (R) vs jmbayes (Python, GPU).
 
-Columns: more patients (3,500 iterations) | more iterations (1,560 patients) |
-long runs (1,872 patients). Rows: MCMC time, peak RAM.
+Left: more patients (3,500 iterations). Right: more iterations, one line per cohort size
+(1,560 patients light, 3,120 patients full colour).
+Top: MCMC time. Bottom: peak memory (RAM, and GPU memory for jmbayes).
+Where R was not run at the longest length, that point is extrapolated linearly from its
+two longest measured runs and drawn dashed with a hollow marker.
 Input: scaling_results.jsonl (scaling.py). Output: figures/benchmarks.png
 """
 import json
@@ -13,7 +16,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import FuncFormatter  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
-C_R, C_PY = "#2a78d6", "#eb6834"
+COLOR = {"R": ("#2a78d6", "#9cc3ef"), "Python-GPU": ("#eb6834", "#f5b493")}  # full, light
+NAME = {"R": "JMbayes2", "Python-GPU": "jmbayes"}
 INK, INK2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 9, "axes.edgecolor": INK2,
                      "axes.labelcolor": INK2, "xtick.color": INK2, "ytick.color": INK2,
@@ -21,56 +25,93 @@ plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 9, "axes.edgecol
                      "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.6,
                      "figure.facecolor": "white"})
 
+COHORTS = (1560, 3120)          # iteration sweeps; the largest is drawn in full colour
 SC = {}
 for line in open(HERE / "scaling_results.jsonl"):
     r = json.loads(line)
     SC[(r["impl"], r["k"], r["n_iter"])] = r          # last run of a job wins
 
-IMPLS = (("R", C_R, "JMbayes2 (R)"), ("Python-GPU", C_PY, "jmbayes2py (GPU)"))
-COLS = [("More patients (3,500 iterations)", "Patients",
-         lambda impl: sorted((r["patients"], r) for (i, k, n), r in SC.items()
-                             if i == impl and n == 3500)),
-        ("More iterations (1,560 patients)", "Iterations per chain",
-         lambda impl: sorted((n, r) for (i, k, n), r in SC.items() if i == impl and k == 5)),
-        ("Long runs (1,872 patients)", "Iterations per chain",
-         lambda impl: sorted((n, r) for (i, k, n), r in SC.items() if i == impl and k == 6))]
-ROWS = [("mcmc_s", "MCMC time"), ("peak_ram_gb", "Peak RAM (GB)")]
+
+def series(impl, patients=None):
+    if patients is None:                               # patient sweep at 3,500 iterations
+        rows = [(r["patients"], r) for (i, k, n), r in SC.items() if i == impl and n == 3500]
+    else:
+        rows = [(n, r) for (i, k, n), r in SC.items()
+                if i == impl and r["patients"] == patients]
+    return sorted(rows, key=lambda t: t[0])
 
 
-def fmt_time(s):
-    return f"{s:.0f} s" if s < 120 else f"{s / 60:.0f} min"
+def extrapolate(pts, key, x_new):
+    (x1, r1), (x2, r2) = pts[-2], pts[-1]
+    return r2[key] + (r2[key] - r1[key]) / (x2 - x1) * (x_new - x2)
+
+
+def fmt(v, key, minutes):
+    if key == "mcmc_s":
+        return f"{v / 60:.0f} min" if minutes else f"{v:.0f} s"
+    return f"{v:.2f} GB" if v < 1 else f"{v:.1f} GB"
+
+
+def draw(ax, impl, pts, key, scale, minutes, color, lw, lab, x_max=None, note=True):
+    x = [p[0] for p in pts]
+    y = [p[1][key] for p in pts]
+    ax.plot(x, [v / scale for v in y], "-o", color=color, lw=lw, ms=4.5, mec="white",
+            mew=1.1, label=lab)
+    end_x, end_y, est = x[-1], y[-1], False
+    if x_max is not None and impl == "R" and x[-1] < x_max and len(pts) >= 2:
+        ye = extrapolate(pts, key, x_max)
+        ax.plot([x[-1], x_max], [y[-1] / scale, ye / scale], "--", color=color, lw=lw * 0.8)
+        ax.plot(x_max, ye / scale, "o", ms=6, mfc="white", mec=color, mew=1.6)
+        end_x, end_y, est = x_max, ye, True
+    if note:
+        ax.annotate(("~" if est else "") + fmt(end_y, key, minutes)
+                    + (" (extrapolated)" if est else ""),
+                    (end_x, end_y / scale), textcoords="offset points", xytext=(6, 0),
+                    fontsize=7.5, color=INK, va="center")
+    if key == "peak_ram_gb" and impl == "Python-GPU":                 # GPU memory too
+        g = [p[1]["gpu_peak_gb"] for p in pts]
+        ax.plot(x, g, ":o", color=color, lw=lw * 0.8, ms=3, mec="white", mew=0.8,
+                label=lab.replace("RAM", "GPU memory"))
+        if note:
+            ax.annotate(fmt(g[-1], key, minutes), (x[-1], g[-1]), textcoords="offset points",
+                        xytext=(6, 0), fontsize=7.5, color=INK, va="center")
 
 
 def main():
-    cols = [c for c in COLS if any(c[2](impl) for impl, _, _ in IMPLS)]
-    fig, axes = plt.subplots(2, len(cols), figsize=(3.4 * len(cols), 5.4), squeeze=False)
-    for j, (title, xlabel, get) in enumerate(cols):
-        for i, (key, ylabel) in enumerate(ROWS):
-            ax = axes[i, j]
-            for impl, col, lab in IMPLS:
-                pts = get(impl)
+    rows = [("mcmc_s", "MCMC time"), ("peak_ram_gb", "Peak memory (GB)")]
+    fig, axes = plt.subplots(2, 2, figsize=(10, 6.6))
+    x_max = max(x for impl in COLOR for c in COHORTS for x, _ in series(impl, c))
+    for i, (key, ylabel) in enumerate(rows):
+        what = "" if key == "mcmc_s" else " RAM"
+        # left: more patients
+        ax = axes[i, 0]
+        for impl in COLOR:
+            draw(ax, impl, series(impl), key, 1, False, COLOR[impl][0], 2,
+                 NAME[impl] + what)
+        ax.set_ylabel("MCMC time (s)" if key == "mcmc_s" else ylabel)
+        # right: more iterations, one line per cohort size
+        ax = axes[i, 1]
+        scale = 60 if key == "mcmc_s" else 1
+        for impl in COLOR:
+            for c in COHORTS:
+                pts = series(impl, c)
                 if not pts:
                     continue
-                x = [p[0] for p in pts]
-                y = [p[1][key] / (60 if key == "mcmc_s" and j == 2 else 1) for p in pts]
-                ax.plot(x, y, "-o", color=col, lw=2, ms=5, mec="white", mew=1.2, label=lab)
-                last = pts[-1][1][key]
-                ax.annotate(fmt_time(last) if key == "mcmc_s" else f"{last:.1f} GB",
-                            (x[-1], y[-1]), textcoords="offset points", xytext=(5, 0),
-                            fontsize=8, color=INK, va="center")
-            ax.set_ylim(bottom=0)
-            ax.margins(x=0.18)
-            ax.xaxis.set_major_formatter(FuncFormatter(
-                lambda v, _: f"{v / 1000:.0f}k" if v >= 1000 and xlabel.startswith("It")
-                else f"{v:,.0f}"))
-            if i == 0:
-                ax.set_title(title, fontsize=9.5, color=INK, loc="left")
-            if i == 1:
-                ax.set_xlabel(xlabel)
-            ax.set_ylabel(ylabel if key != "mcmc_s" else
-                          ("MCMC time (min)" if j == 2 else "MCMC time (s)"))
-            if i == 0 and j == 0:
-                ax.legend(frameon=False, fontsize=8, loc="upper left")
+                big = c == max(COHORTS)
+                draw(ax, impl, pts, key, scale, True, COLOR[impl][0 if big else 1],
+                     2 if big else 1.4, f"{NAME[impl]}{what}, {c:,} patients",
+                     x_max=x_max if big else None, note=big)
+        ax.set_ylabel("MCMC time (min)" if key == "mcmc_s" else ylabel)
+        for j, a in enumerate(axes[i]):
+            a.set_ylim(bottom=0)
+            a.margins(x=0.2 if j else 0.16)
+            a.legend(frameon=False, fontsize=7.5, loc="upper left")
+            a.xaxis.set_major_formatter(FuncFormatter(
+                lambda v, _, j=j: f"{v / 1000:.0f}k" if j and v >= 1000 else f"{v:,.0f}"))
+    axes[0, 0].set_title("More patients (3,500 iterations)", fontsize=10, color=INK, loc="left")
+    axes[0, 1].set_title("More iterations", fontsize=10, color=INK, loc="left")
+    axes[1, 0].set_xlabel("Patients")
+    axes[1, 1].set_xlabel("Iterations per chain")
     fig.tight_layout()
     out = HERE / "figures" / "benchmarks.png"
     fig.savefig(out, dpi=200)

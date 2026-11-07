@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-from jmbayes2py.design import Response, SplineBasis, Terms, var
+from jmbayes.design import Response, SplineBasis, Terms, var
 
 _SPLINE = re.compile(r"^(ns|bs)\((\w+),(df=)?(\d+)\)$")
 _FUN = re.compile(r"^(\w+)\((\w+)\)$")
