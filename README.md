@@ -49,6 +49,34 @@ fit = model.fit(visits, patients)
 fit.summary()
 ```
 
+## Benchmarks
+
+The model is the JMbayes2 README model: pbc2, three markers (log serum bilirubin,
+prothrombin time, ascites), replicated to get more patients. Each run uses 3 chains.
+JMbayes2 0.6-5 ran on the CPU; jmbayes2py ran on an RTX 3090.
+
+![MCMC time and peak RAM of JMbayes2 and jmbayes2py](benchmark/figures/benchmarks.png)
+
+The two programs agree. Hazard ratios from the same model, fitted by each program
+(posterior mean and 95% credible interval):
+
+![Hazard ratios from JMbayes2 and jmbayes2py](benchmark/figures/forest.png)
+
+| Patients | Iterations | JMbayes2: MCMC time | JMbayes2: peak RAM | jmbayes2py: MCMC time | jmbayes2py: peak RAM | Speed-up |
+|---:|---:|---:|---:|---:|---:|---:|
+| 312   | 3,500  | 55 s   | 1.28 GB | 22 s  | 1.22 GB | 2.5× |
+| 624   | 3,500  | 87 s   | 1.45 GB | 24 s  | 1.22 GB | 3.6× |
+| 1,560 | 3,500  | 157 s  | 1.95 GB | 33 s  | 1.22 GB | 4.8× |
+| 3,120 | 3,500  | 202 s  | 2.41 GB | 46 s  | 1.24 GB | 4.4× |
+| 1,560 | 7,000  | 237 s  | 2.34 GB | 66 s  | 1.23 GB | 3.6× |
+| 1,560 | 14,000 | 716 s  | 3.36 GB | 133 s | 1.24 GB | 5.4× |
+| 1,560 | 28,000 | 1,046 s | 6.25 GB | not run | constant by design | |
+
+The full report, with equivalence tests, hazard ratios, credible intervals and scaling
+plots, is in [benchmark/jmbayes2py_vs_JMbayes2.pdf](benchmark/jmbayes2py_vs_JMbayes2.pdf).
+The scripts that reproduce it are in [benchmark/](benchmark/). The R scripts need
+JMbayes2 installed from CRAN, and are only used for the comparison.
+
 ## Writing terms
 
 Terms are Python objects and combine with operators:
@@ -137,34 +165,6 @@ fit = jmb.jm(
     data=visits, time_var="year",
     functional_forms="~ value(log(serBilir)) + slope(log(serBilir))")
 ```
-
-## Benchmarks
-
-The model is the JMbayes2 README model: pbc2, three markers (log serum bilirubin,
-prothrombin time, ascites), replicated to get more patients. Each run uses 3 chains.
-JMbayes2 0.6-5 ran on the CPU; jmbayes2py ran on an RTX 3090.
-
-![MCMC time and peak RAM of JMbayes2 and jmbayes2py](benchmark/figures/benchmarks.png)
-
-The two programs agree. Hazard ratios from the same model, fitted by each program
-(posterior mean and 95% credible interval):
-
-![Hazard ratios from JMbayes2 and jmbayes2py](benchmark/figures/forest.png)
-
-| Patients | Iterations | JMbayes2: MCMC time | JMbayes2: peak RAM | jmbayes2py: MCMC time | jmbayes2py: peak RAM | Speed-up |
-|---:|---:|---:|---:|---:|---:|---:|
-| 312   | 3,500  | 55 s   | 1.28 GB | 22 s  | 1.22 GB | 2.5× |
-| 624   | 3,500  | 87 s   | 1.45 GB | 24 s  | 1.22 GB | 3.6× |
-| 1,560 | 3,500  | 157 s  | 1.95 GB | 33 s  | 1.22 GB | 4.8× |
-| 3,120 | 3,500  | 202 s  | 2.41 GB | 46 s  | 1.24 GB | 4.4× |
-| 1,560 | 7,000  | 237 s  | 2.34 GB | 66 s  | 1.23 GB | 3.6× |
-| 1,560 | 14,000 | 716 s  | 3.36 GB | 133 s | 1.24 GB | 5.4× |
-| 1,560 | 28,000 | 1,046 s | 6.25 GB | not run | constant by design | |
-
-The full report, with equivalence tests, hazard ratios, credible intervals and scaling
-plots, is in [benchmark/jmbayes2py_vs_JMbayes2.pdf](benchmark/jmbayes2py_vs_JMbayes2.pdf).
-The scripts that reproduce it are in [benchmark/](benchmark/). The R scripts need
-JMbayes2 installed from CRAN, and are only used for the comparison.
 
 ## How it works
 
