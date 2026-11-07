@@ -6,15 +6,15 @@ Rizopoulos, Papageorgiou and Miranda Afonso. It fits the same model, with the sa
 and the same MCMC algorithm, so it gives the same results within Monte Carlo error. It is
 also much faster and needs far less memory.
 
-* **Small, nearly flat memory use.** 1.2–1.4 GB of RAM and at most 0.3 GB of GPU memory in
+* **Small, nearly flat memory use.** 1.3–1.4 GB of RAM and at most 0.2 GB of GPU memory in
   every run we measured, up to 90,000 iterations. Only the kept posterior draws grow with
   run length. JMbayes2's memory grows quickly with run length and cohort size (6.2 GB at
-  28,000 iterations for 1,560 patients), so long runs on large cohorts exceed a 16 GB
+  14,000 iterations for 3,120 patients), so long runs on large cohorts exceed a 16 GB
   machine. jmbayes runs them on a laptop or a small GPU.
-* **Faster, and it scales better.** On a GPU the MCMC is 2.5× faster than JMbayes2 on
-  312 patients, and 3.9–5.4× faster on 1,560–3,120 patients and on longer runs. With ten
-  times the patients, the MCMC in jmbayes takes about 2× longer, and in JMbayes2 about
-  3.7× longer (see [Benchmarks](#benchmarks)).
+* **Faster, and it scales better.** On a GPU the MCMC is 3.3× faster than JMbayes2 on
+  312 patients, and 5.4–9.4× faster on 1,560–3,120 patients and on longer runs. With ten
+  times the patients, the MCMC in jmbayes takes 1.4× longer, and in JMbayes2 3.7× longer
+  (see [Benchmarks](#benchmarks)).
 * **Same results.** It was checked against JMbayes2 on the same data and models. The
   estimates, hazard ratios, credible intervals and dynamic predictions agree with R
   more closely than two R runs agree with each other.
@@ -85,7 +85,7 @@ fit.summary()
 
 The model is the JMbayes2 README model: pbc2, three markers (log serum bilirubin,
 prothrombin time, ascites), replicated to get more patients. Each run uses 3 chains.
-JMbayes2 0.6-5 ran on the CPU; jmbayes ran on an RTX 3090.
+JMbayes2 0.6-5 ran on the CPU; jmbayes ran on an RTX 3090 in float32, its default.
 
 ![MCMC time and peak RAM of JMbayes2 and jmbayes](benchmark/figures/benchmarks.png)
 
@@ -96,16 +96,31 @@ The two programs agree. Hazard ratios from the same model, fitted by each progra
 
 | Patients | Iterations | JMbayes2: MCMC time | JMbayes2: peak RAM | jmbayes: MCMC time | jmbayes: peak RAM | Speed-up |
 |---:|---:|---:|---:|---:|---:|---:|
-| 312   | 3,500  | 55 s   | 1.28 GB | 22 s  | 1.22 GB | 2.5× |
-| 624   | 3,500  | 87 s   | 1.45 GB | 24 s  | 1.22 GB | 3.6× |
-| 1,560 | 3,500  | 157 s  | 1.95 GB | 33 s  | 1.22 GB | 4.8× |
-| 3,120 | 3,500  | 202 s  | 2.41 GB | 46 s  | 1.24 GB | 4.4× |
-| 1,560 | 7,000  | 237 s  | 2.34 GB | 66 s  | 1.23 GB | 3.6× |
-| 1,560 | 14,000 | 716 s  | 3.36 GB | 133 s | 1.24 GB | 5.4× |
-| 1,560 | 28,000 | 1,046 s | 6.25 GB | 268 s | 1.26 GB | 3.9× |
+| 312   | 3,500  | 55 s    | 1.28 GB | 17 s  | 1.28 GB | 3.3× |
+| 624   | 3,500  | 87 s    | 1.45 GB | 17 s  | 1.28 GB | 5.0× |
+| 1,560 | 3,500  | 157 s   | 1.95 GB | 20 s  | 1.29 GB | 8.0× |
+| 3,120 | 3,500  | 202 s   | 2.41 GB | 24 s  | 1.31 GB | 8.6× |
+| 1,560 | 7,000  | 237 s   | 2.34 GB | 41 s  | 1.29 GB | 5.8× |
+| 1,560 | 14,000 | 716 s   | 3.36 GB | 82 s  | 1.30 GB | 8.8× |
+| 1,560 | 28,000 | 1,046 s | 6.25 GB | 164 s | 1.31 GB | 6.4× |
+| 3,120 | 7,000  | 450 s   | 3.44 GB | 48 s  | 1.31 GB | 9.4× |
+| 3,120 | 14,000 | 521 s   | 6.15 GB | 96 s  | 1.32 GB | 5.4× |
+| 1,560 | 90,000 | -       | -       | 529 s | 1.36 GB | |
+| 3,120 | 90,000 | -       | -       | 643 s | 1.38 GB | |
 
-The full report, with equivalence tests, hazard ratios, credible intervals and scaling
-plots, is in [benchmark/jmbayes_vs_JMbayes2.pdf](benchmark/jmbayes_vs_JMbayes2.pdf).
+JMbayes2 runs at 28,000–90,000 iterations for 3,120 patients, and at 60,000–90,000 for
+1,560, are still in progress.
+
+The speed comes from the GPU. On the CPU alone, jmbayes is about as fast as JMbayes2 on
+small cohorts and slower on large ones, with less than half the memory (the CPU runs are
+in the report).
+
+jmbayes computes in float32 by default; `fit(..., dtype="float64")` gives 64-bit precision.
+The results are statistically the same: both are equivalent to JMbayes2 in the same tests
+([float64 report](benchmark/jmbayes_float64_vs_JMbayes2.pdf)).
+
+The full report, with equivalence tests, hazard ratios, credible intervals, convergence
+(Rhat) and scaling plots, is in [benchmark/jmbayes_vs_JMbayes2.pdf](benchmark/jmbayes_vs_JMbayes2.pdf).
 The scripts that reproduce it are in [benchmark/](benchmark/). The R scripts need
 JMbayes2 installed from CRAN, and are only used for the comparison.
 

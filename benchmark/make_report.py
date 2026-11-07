@@ -31,8 +31,8 @@ import argparse  # noqa: E402
 _ap = argparse.ArgumentParser()
 _ap.add_argument("--r", default="R_eq.json")
 _ap.add_argument("--r2", default="R_eq_seed456.json")
-_ap.add_argument("--py", default="PY_eq_seed123.json")
-_ap.add_argument("--py2", default="PY_eq_seed456.json")
+_ap.add_argument("--py", default="PY_eq32_seed123.json")
+_ap.add_argument("--py2", default="PY_eq32_seed456.json")
 _ap.add_argument("--settings", default="12 chains, 30,000 iterations per chain, 5,000 burn-in, "
                                        "no thinning (300,000 retained draws per program)")
 _ap.add_argument("--py-rinit", default="PY_eqRinit_seed123.json")
@@ -527,6 +527,107 @@ story.append(KeepTogether([
     tbl(rows, [3.6 * cm, 2.4 * cm, 2.8 * cm, 2.8 * cm, 2.8 * cm, 2.8 * cm])]))
 
 
+# ---- Convergence (Rhat), R vs Python
+def rhat_of(run):
+    """Rhat of the 15 regression coefficients and the 2 residual SDs, keyed by name.
+    R files store them per coefficient table (with 'sigma' rows inside betas1/betas2);
+    Python files store them per block."""
+    out = {}
+    if "gammas_alphas" in run:
+        for r in run["gammas_alphas"]:
+            out["surv:" + r["name"]] = r["Rhat"]
+        for b in ("betas1", "betas2", "betas3"):
+            for r in run[b]:
+                out[(f"sigma:{b}" if r["name"] == "sigma" else f"{b}:{r['name']}")] = r["Rhat"]
+    else:
+        for b in ("gammas", "alphas"):
+            for r in run[b]:
+                out["surv:" + r["name"]] = r["Rhat"]
+        for b in ("betas1", "betas2", "betas3"):
+            for r in run[b]:
+                out[f"{b}:{r['name']}"] = r["Rhat"]
+        for b, r in zip(("betas1", "betas2"), run["sigmas"]):
+            out[f"sigma:{b}"] = r["Rhat"]
+    return out
+
+
+RH_LABEL = {"surv": "Survival", "betas1": "log(bilirubin)", "betas2": "prothrombin",
+            "betas3": "ascites"}
+
+
+def rh_name(key):
+    grp, nm = key.split(":", 1)
+    if grp == "sigma":
+        return f"{RH_LABEL[nm]}: residual SD"
+    return f"{RH_LABEL[grp]}: {nm}"
+
+
+R2_RUN = json.load(open(HERE / ARGS.r2)) if (HERE / ARGS.r2).exists() else None
+rh_runs = [("R, seed 123", rhat_of(R))] + ([("R, seed 456", rhat_of(R2_RUN))] if R2_RUN else []) \
+    + [("Python, seed 123", rhat_of(P)), ("Python, seed 456", rhat_of(P2))]
+rh_keys = [k for k in rh_runs[0][1] if all(k in d for _, d in rh_runs)]
+py_all = [r["Rhat"] for run in (P, P2) for blk, _ in GROUPS for r in run[blk]]
+story.append(PageBreak())
+story.append(Paragraph("Convergence: Rhat in both programs", H2))
+story.append(Paragraph(
+    "Rhat (Gelman-Rubin potential scale reduction) compares the spread within each chain to "
+    "the spread between chains; values near 1 mean the chains agree, and JMbayes2's usual "
+    "threshold is 1.05. Both programs compute it the same way (the point estimate of "
+    "<font face='Courier'>coda::gelman.diag</font>, which JMbayes2 reports). The R output "
+    "stores Rhat for the regression coefficients and residual SDs only, so those are compared "
+    f"here; across all {len(py_all) // 2} parameters, the Python runs reach at most "
+    f"{max(py_all):.3f}.", BODY))
+story.append(Spacer(1, 3))
+rows = [["Parameter"] + [n for n, _ in rh_runs]]
+for k in rh_keys:
+    rows.append([rh_name(k)] + [f"{d[k]:.3f}" for _, d in rh_runs])
+mx = [max(d[k] for k in rh_keys) for _, d in rh_runs]
+rows.append(["<b>Largest</b>"] + [f"<b>{v:.3f}</b>" for v in mx])
+story.append(KeepTogether([
+    Paragraph(f"<b>Long runs</b> ({ARGS.settings})", BODY),
+    tbl(rows, [5.4 * cm] + [(17.0 - 5.4) / len(rh_runs) * cm] * len(rh_runs))]))
+story.append(Spacer(1, 3))
+story.append(Paragraph(
+    "The pattern is the same in both programs: the longitudinal coefficients are at 1.00, and "
+    "the slowest-mixing parameters are the same ones - the ascites association and the "
+    "ascites (logistic) sub-model. All stay below 1.05 in every run.", BODY))
+
+SCAL_IMPLS = [("R", "JMbayes2"), ("Python-GPU", "Python, GPU"), ("Python-CPU", "Python, CPU")]
+scal_cfg = sorted({(r["k"], r["n_iter"]) for r in SC}, key=lambda t: (t[1], t[0]))
+rows = [["Patients", "Iterations"] + [lab for _, lab in SCAL_IMPLS]]
+n_short = 0
+for k, n in scal_cfg:
+    cells = []
+    for impl, _ in SCAL_IMPLS:
+        f = HERE / f"scal_{impl}_k{k}_it{n}.json"
+        if not f.exists():
+            cells.append("-")
+            continue
+        d = rhat_of(json.load(open(f)))
+        d = {kk: v for kk, v in d.items() if not kk.startswith("sigma:")}
+        worst = max(d, key=d.get)
+        cells.append(f"{d[worst]:.2f}, {sum(v > 1.05 for v in d.values())}/{len(d)} "
+                     f"<font size=6.5>({rh_name(worst)})</font>")
+        n_short += 1
+    rows.append([f"{312 * k:,}", f"{n:,}"] + cells)
+if n_short:
+    story.append(Spacer(1, 6))
+    story.append(KeepTogether([
+        Paragraph("<b>Short runs</b> (scaling runs in Section 2: 3 chains, burn-in 500, "
+                  "thinning 5). Each cell: largest Rhat, number of the 15 coefficients above "
+                  "1.05, and the worst coefficient.", BODY),
+        tbl(rows, [1.7 * cm, 1.8 * cm] + [4.5 * cm] * len(SCAL_IMPLS))]))
+    story.append(Spacer(1, 3))
+    story.append(Paragraph(
+        "With JMbayes2's default length (3,500 iterations) and 3 chains, neither program "
+        "converges for the ascites-related parameters on this model: several coefficients "
+        "are above 1.05 in R and in Python alike, at every cohort size. Rhat is itself noisy "
+        "with only 3 chains, so the exact values move from run to run, but neither program "
+        "is consistently better. For this model, real analyses need longer runs or more "
+        "chains in either program - which is where the speed of jmbayes on a GPU matters "
+        "most, since extra chains cost almost nothing there.", BODY))
+
+
 # ---- Section 1b: isolating the sampler
 if RINIT:
     a, b = summarise(CMP), summarise(RINIT["cmp"])
@@ -608,10 +709,11 @@ if any(r["k"] == 5 and r["n_iter"] > 3500 for r in SC):
 rows = [["Implementation", "Patients", "Iterations", "MCMC (s)", "Total (s)", "Peak RAM (GB)",
          "GPU memory (GB)"]]
 for r in sorted(SC, key=lambda r: (r["n_iter"], r["patients"], r["impl"])):
-    rows.append(["JMbayes2 (R)" if r["impl"] == "R" else "Python, GPU", f"{r['patients']:,}",
+    rows.append([{"R": "JMbayes2 (R)", "Python-GPU": "Python, GPU",
+                  "Python-CPU": "Python, CPU"}[r["impl"]], f"{r['patients']:,}",
                  f"{r['n_iter']:,}", f"{r['mcmc_s']:.1f}", f"{r['wall_s']:.1f}",
                  f"{r['peak_ram_gb']:.2f}",
-                 "-" if r["impl"] == "R" else f"{r['gpu_peak_gb']:.2f}"])
+                 f"{r['gpu_peak_gb']:.2f}" if r["impl"] == "Python-GPU" else "-"])
 story.append(Spacer(1, 4))
 story.append(KeepTogether([Paragraph("<b>All measurements</b>", BODY),
                            tbl(rows, [3.2 * cm, 2 * cm, 2.2 * cm, 2 * cm, 2 * cm, 2.6 * cm,

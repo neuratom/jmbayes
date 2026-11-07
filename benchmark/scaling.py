@@ -1,4 +1,4 @@
-"""Scaling benchmark: JMbayes2 (R) vs jmbayes (Python, GPU).
+"""Scaling benchmark: JMbayes2 (R) vs jmbayes (Python, GPU and CPU).
 
 Runs each job as its own process, one at a time, and samples the resident memory
 of the whole process tree every 0.2 s (R starts one worker process per chain,
@@ -31,6 +31,9 @@ ENV = dict(**__import__("os").environ, R_LIBS_USER="C:/Users/mo/R/win-library/4.
 GRID = ([(k, 3500) for k in (1, 2, 5, 10)]
         + [(10, n) for n in (7000, 14000, 28000, 60000, 90000)]
         + [(5, n) for n in (7000, 14000, 28000, 60000, 90000)])
+# jmbayes on the CPU (same machine as R): patient sweep and one 7,000-iteration run.
+# Its time is linear in iterations, so longer CPU runs are extrapolated from these.
+CPU_GRID = [(k, 3500) for k in (1, 2, 5, 10)] + [(5, 7000), (10, 7000)]
 R_SKIP = set()               # jobs not run in R (none: R's memory growth is measured)
 BURNIN = 500
 
@@ -68,8 +71,8 @@ def main():
         for line in OUT.read_text().splitlines():
             r = json.loads(line)
             done.add((r["impl"], r["k"], r["n_iter"]))
-    for impl in ("Python-GPU", "R"):              # Python first: its jobs are short
-        for k, n_iter in GRID:
+    for impl in ("Python-GPU", "Python-CPU", "R"):     # short jobs first
+        for k, n_iter in (CPU_GRID if impl == "Python-CPU" else GRID):
             if (impl, k, n_iter) in done or (impl == "R" and (k, n_iter) in R_SKIP):
                 continue
             if (HERE / "PAUSE").exists():
@@ -80,7 +83,8 @@ def main():
                 cmd = [RSCRIPT, str(HERE / "run_pbc2_R.R"), str(k), str(res_file),
                        str(n_iter), str(BURNIN)]
             else:
-                cmd = [PY, str(HERE.parent / "run_pbc2.py"), "--device", "cuda",
+                cmd = [PY, str(HERE.parent / "run_pbc2.py"),
+                       "--device", "cpu" if impl == "Python-CPU" else "cuda",
                        "--replicate", str(k), "--n-iter", str(n_iter),
                        "--n-burnin", str(BURNIN), "--dtype", "float32",
                        "--out", str(res_file)]
