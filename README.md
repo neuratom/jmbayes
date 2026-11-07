@@ -1,24 +1,30 @@
 # `jmbayes`: JMBayes2 Accelerated Python Implementation
 
-Bayesian joint models for longitudinal and time-to-event data in Python and PyTorch,
-based on the R package [JMbayes2](https://github.com/drizopoulos/JMbayes2) by
-Rizopoulos, Papageorgiou and Miranda Afonso. It fits the same model, with the same priors
-and the same MCMC algorithm, so it gives the same results within Monte Carlo error. It is
-also much faster and needs far less memory.
+Bayesian joint models for longitudinal and time-to-event data, in Python on the GPU.
+**Up to 14× faster than JMbayes2, with 18× less memory, and the same results.**
 
-* **Small, nearly flat memory use.** 1.3–1.4 GB of RAM and at most 0.2 GB of GPU memory in
-  every run we measured, up to 90,000 iterations. Only the kept posterior draws grow with
-  run length. JMbayes2's memory grows with run length and cohort size: for 3,120 patients
-  it needs 12 GB at 28,000 iterations and 25 GB at 60,000, beyond a 16 GB machine.
-  jmbayes runs the same fits in 1.4 GB, on a laptop or a small GPU.
-* **Faster, and it scales better.** On a GPU the MCMC is 3.3× faster than JMbayes2 on
-  312 patients, and 5.4–14× faster on 1,560–3,120 patients and on longer runs (at
-  60,000 iterations for 3,120 patients: 98 minutes in JMbayes2, 7 minutes in jmbayes). With ten
-  times the patients, the MCMC in jmbayes takes 1.4× longer, and in JMbayes2 3.7× longer
+|  | JMbayes2 | jmbayes |
+|---|---:|---:|
+| 3,120 patients, 60,000 iterations | 98 min, 25.2 GB RAM | **7 min, 1.4 GB RAM** |
+
+jmbayes is a reimplementation of the R package
+[JMbayes2](https://github.com/drizopoulos/JMbayes2) by Rizopoulos, Papageorgiou and
+Miranda Afonso: the same model, the same priors and the same MCMC algorithm.
+
+* **Long runs on large cohorts, on ordinary hardware.** jmbayes uses 1.3–1.4 GB of RAM
+  and under 0.2 GB of GPU memory in every run we measured, from 3,500 to 90,000
+  iterations. JMbayes2's memory grows with cohort size × run length: for 3,120 patients
+  it needs 12 GB at 28,000 iterations and 25 GB at 60,000, more than a 16 GB machine has.
+* **The bigger the problem, the bigger the gap.** 3.3× faster than JMbayes2 on 312
+  patients, 8–9× on 1,560–3,120 patients at JMbayes2's default run length, and up to 14×
+  on long runs. With ten times the
+  patients, jmbayes takes 1.4× longer and JMbayes2 3.7× longer
   (see [Benchmarks](#benchmarks)).
-* **Same results.** It was checked against JMbayes2 on the same data and models. The
-  estimates, hazard ratios, credible intervals and dynamic predictions agree with R
-  more closely than two R runs agree with each other.
+* **The same answers, formally tested.** In equivalence tests against JMbayes2, all 50
+  model parameters agree within 0.2 posterior SD, every regression coefficient leads to
+  the same conclusion, and dynamic predictions match. jmbayes and JMbayes2 differ from
+  each other no more than two JMbayes2 runs with different seeds do.
+* **A Python interface**, plus JMbayes2-style formula strings if you prefer them.
 
 ## Install
 
