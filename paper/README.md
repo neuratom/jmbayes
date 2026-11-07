@@ -9,8 +9,8 @@
    LaTeX itself with pdflatex. To recreate the zip after editing, include `main.tex` and
    `figures/*.png`, nothing else.
 2. Fill in the form:
-   * **Title:** jmbayes: data-parallel Bayesian joint models for longitudinal and
-     time-to-event data, up to 14x faster than JMbayes2
+   * **Title:** jmbayes: fast, memory-efficient, data-parallel Bayesian joint models for
+     longitudinal and time-to-event data
    * **Authors:** Mo Assaf
    * **Abstract:** copy it from `main.tex`, without the LaTeX commands (it is about 1,700
      characters; arXiv's limit is 1,920)
