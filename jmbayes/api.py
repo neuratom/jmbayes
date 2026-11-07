@@ -303,8 +303,10 @@ class JointModelFit:
         return names.index(outcome)
 
     # ---- printing ------------------------------------------------------------
-    def summary(self, digits: int = 4) -> dict:
-        """Print a summary like summary.jm() in R and return the tables."""
+    def summary(self, digits: int = 4) -> None:
+        """Print a summary like summary.jm() in R. The tables themselves come from
+        .survival_table(), .hazard_ratios(), .coefficients() and
+        .random_effects_covariance()."""
         fmt = lambda df: df[["Mean", "StDev", "2.5%", "97.5%", "P", "Rhat"]].to_string(  # noqa
             float_format=lambda v: f"{v:.{digits}f}")
         md, s = self.md, self.settings
@@ -334,7 +336,6 @@ class JointModelFit:
         print(f"\nMCMC: {s['n_chains']} chains, {s['n_iter']} iterations, burn-in "
               f"{s['n_burnin']}, thinning {s['n_thin']}, device {self.timing['device']}, "
               f"time {self.timing['mcmc']:.1f}s")
-        return out
 
     def __repr__(self):
         return (f"<JointModelFit: {self.md.n} patients, {len(self.md.outcomes)} longitudinal "

@@ -31,18 +31,13 @@ Miranda Afonso: the same model, the same priors and the same MCMC algorithm.
 jmbayes runs on any CPU, and on NVIDIA GPUs through PyTorch. Install PyTorch first, in
 the version that fits your machine, then this package.
 
-```
-git clone https://github.com/neuratom/jmbayes.git
-cd jmbayes
-```
-
 **With pip**
 
 ```
 python -m venv .venv
 .venv\Scripts\activate             # macOS/Linux: source .venv/bin/activate
 pip install torch                  # see the note below for an NVIDIA GPU on Windows
-pip install -e .
+pip install jmbayes
 ```
 
 **With conda**
@@ -50,8 +45,11 @@ pip install -e .
 ```
 conda create -n jmbayes -c conda-forge python=3.11 pytorch numpy scipy pandas statsmodels
 conda activate jmbayes
-pip install --no-deps -e .
+pip install --no-deps jmbayes
 ```
+
+**From source** (for the benchmarks, or to change the code): `git clone
+https://github.com/neuratom/jmbayes.git`, then `pip install -e .` in that folder.
 
 conda-forge picks a GPU build of PyTorch by itself when it finds an NVIDIA driver.
 
@@ -65,7 +63,7 @@ python -c "import torch; print(torch.cuda.is_available())"
 ```
 
 `False` is fine: everything runs on the CPU, just slower for large studies. Apple GPUs are
-not used, because the model needs 64-bit precision, which they do not support.
+not supported yet.
 
 ## Fit a model
 
@@ -92,14 +90,22 @@ fit.summary()
 
 The model is the JMbayes2 README model: pbc2, three markers (log serum bilirubin,
 prothrombin time, ascites), replicated to get more patients. Each run uses 3 chains.
-JMbayes2 0.6-5 ran on the CPU; jmbayes ran on an RTX 3090 in float32, its default.
+JMbayes2 runs its chains in parallel on the CPU; jmbayes ran on the GPU in float32, its
+default. All runs were on one machine, one run at a time:
 
-![MCMC time and peak RAM of JMbayes2 and jmbayes](benchmark/figures/benchmarks.png)
+| | |
+|---|---|
+| CPU | Intel Core i9-12900K, x86-64 (16 cores: 8 performance + 8 efficiency, 24 threads) |
+| RAM | 64 GB |
+| GPU | NVIDIA GeForce RTX 3090, 24 GB |
+| Software | Windows 11; R 4.6.2 with JMbayes2 0.6-5; Python 3.11, PyTorch 2.6 (CUDA 12.4) |
+
+![MCMC time and peak RAM of JMbayes2 and jmbayes](https://raw.githubusercontent.com/neuratom/jmbayes/main/benchmark/figures/benchmarks.png)
 
 The two programs agree. Hazard ratios from the same model, fitted by each program
 (posterior mean and 95% credible interval):
 
-![Hazard ratios from JMbayes2 and jmbayes](benchmark/figures/forest.png)
+![Hazard ratios from JMbayes2 and jmbayes](https://raw.githubusercontent.com/neuratom/jmbayes/main/benchmark/figures/forest.png)
 
 | Patients | Iterations | JMbayes2: MCMC time | JMbayes2: peak RAM | jmbayes: MCMC time | jmbayes: peak RAM | Speed-up |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -126,11 +132,11 @@ in the report).
 
 jmbayes computes in float32 by default; `fit(..., dtype="float64")` gives 64-bit precision.
 The results are statistically the same: both are equivalent to JMbayes2 in the same tests
-([float64 report](benchmark/jmbayes_float64_vs_JMbayes2.pdf)).
+([float64 report](https://github.com/neuratom/jmbayes/blob/main/benchmark/jmbayes_float64_vs_JMbayes2.pdf)).
 
 The full report, with equivalence tests, hazard ratios, credible intervals, convergence
-(Rhat) and scaling plots, is in [benchmark/jmbayes_vs_JMbayes2.pdf](benchmark/jmbayes_vs_JMbayes2.pdf).
-The scripts that reproduce it are in [benchmark/](benchmark/). The R scripts need
+(Rhat) and scaling plots, is in [benchmark/jmbayes_vs_JMbayes2.pdf](https://github.com/neuratom/jmbayes/blob/main/benchmark/jmbayes_vs_JMbayes2.pdf).
+The scripts that reproduce it are in [benchmark/](https://github.com/neuratom/jmbayes/tree/main/benchmark). The R scripts need
 JMbayes2 installed from CRAN, and are only used for the comparison.
 
 ## Writing terms
@@ -253,7 +259,7 @@ proposals, adaptive tuning and priors. What changes is how it runs:
   log-likelihood table is never stored. That table is what makes JMbayes2's memory grow.
 
 Implementation notes, including places where we found JMbayes2's behaviour questionable,
-are in [NOTES.md](NOTES.md).
+are in [NOTES.md](https://github.com/neuratom/jmbayes/blob/main/NOTES.md).
 
 ## Citation
 

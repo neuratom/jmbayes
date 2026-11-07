@@ -10,8 +10,28 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
-authors = [{ name = "Neuratom" }]
+authors = [{ name = "Mo Assaf", email = "mormoassaf@gmail.com" }]
+keywords = ["joint models", "survival analysis", "longitudinal data", "Bayesian", "MCMC",
+            "JMbayes2", "PyTorch", "GPU", "biostatistics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Healthcare Industry",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
 dependencies = ["numpy", "scipy", "pandas", "statsmodels", "torch"]
+
+[project.urls]
+Homepage = "https://github.com/neuratom/jmbayes"
+Repository = "https://github.com/neuratom/jmbayes"
+Issues = "https://github.com/neuratom/jmbayes/issues"
+"JMbayes2 (R)" = "https://github.com/drizopoulos/JMbayes2"
 
 [project.optional-dependencies]
 dev = ["pytest", "pyreadr", "matplotlib", "reportlab", "psutil", "pypdfium2"]

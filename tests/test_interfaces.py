@@ -112,6 +112,6 @@ def test_saved_loglik_table_reproduces_fit_statistics(pbc2_data):
         N = x.shape[0]
         lpml = np.sum(np.log(N) - logsumexp(-x, axis=0))
         waic = -2 * np.sum(logsumexp(x, axis=0) - np.log(N)) + 2 * np.sum(x.var(0, ddof=1))
-        tol = 1e-8 if dtype == "float64" else 1e-4
+        tol = 1e-8                     # totals are kept in float64 in both precisions
         assert np.isclose(lpml, fit.fit_statistics["LPML"], rtol=tol), dtype
         assert np.isclose(waic, fit.fit_statistics["WAIC"], rtol=tol), dtype

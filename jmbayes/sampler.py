@@ -271,10 +271,13 @@ class JointModelSampler:
                          r_sigmas=self.n_out).items():
             s[k] = z(n_iter, C, w)
         s["acc_b"], s["sum_b"] = z(C, self.n, self.q), z(C, self.n, self.q)
-        s["n_keep"], s["sum_tot"] = z(()), z(C)
-        s["st_mean"], s["st_m2"] = z(C, self.n), z(C, self.n)
-        s["lse_pos"] = torch.full((C, self.n), -math.inf, dtype=dt, device=dev)
-        s["lse_neg"] = torch.full((C, self.n), -math.inf, dtype=dt, device=dev)
+        # fit-statistic running totals stay in float64 whatever the sampling precision:
+        # they sum over every kept draw, where float32 rounding would add up
+        z64 = lambda *sh: torch.zeros(*sh, dtype=torch.float64, device=dev)  # noqa: E731
+        s["n_keep"], s["sum_tot"] = z64(()), z64(C)
+        s["st_mean"], s["st_m2"] = z64(C, self.n), z64(C, self.n)
+        s["lse_pos"] = torch.full((C, self.n), -math.inf, dtype=torch.float64, device=dev)
+        s["lse_neg"] = torch.full((C, self.n), -math.inf, dtype=torch.float64, device=dev)
         s["it"] = torch.zeros(1, dtype=torch.long, device=dev)
         if self._save_ll:          # optional: log-likelihood per patient per kept iteration
             s["r_ll"] = z(n_iter - self._ll_burnin, C, self.n)
@@ -576,15 +579,16 @@ class JointModelSampler:
 
     def accumulate(self, s, keep):
         """Running fit statistics and random-effect means (after burn-in)."""
-        k = keep.to(self.dt)
+        k = keep.to(torch.float64)
         ll = s["ll_long"] + s["ll_surv"] + s["ll_re"]
+        x = ll.to(torch.float64)
         s["n_keep"] = s["n_keep"] + k
-        s["sum_tot"] = s["sum_tot"] + k * ll.sum(-1)
-        d = ll - s["st_mean"]
+        s["sum_tot"] = s["sum_tot"] + k * x.sum(-1)
+        d = x - s["st_mean"]
         s["st_mean"] = s["st_mean"] + k * d / torch.clamp(s["n_keep"], min=1.0)
-        s["st_m2"] = s["st_m2"] + k * d * (ll - s["st_mean"])
-        s["lse_pos"] = torch.where(keep, torch.logaddexp(s["lse_pos"], ll), s["lse_pos"])
-        s["lse_neg"] = torch.where(keep, torch.logaddexp(s["lse_neg"], -ll), s["lse_neg"])
+        s["st_m2"] = s["st_m2"] + k * d * (x - s["st_mean"])
+        s["lse_pos"] = torch.where(keep, torch.logaddexp(s["lse_pos"], x), s["lse_pos"])
+        s["lse_neg"] = torch.where(keep, torch.logaddexp(s["lse_neg"], -x), s["lse_neg"])
         return ll
 
     # ------------------------------------------------------------- one iteration

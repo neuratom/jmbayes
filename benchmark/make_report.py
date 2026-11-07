@@ -336,8 +336,10 @@ story.append(Paragraph(
     "Joint model for longitudinal and time-to-event data, ported from the R package JMbayes2 "
     "(v0.6-5) to Python/PyTorch. Same model, same priors and same MCMC algorithm; it runs on "
     "CPU or GPU. This report tests whether the two programs give the same answers on the "
-    "same data. All numbers were measured on one machine (24-core CPU, 64 GB RAM, NVIDIA "
-    "RTX 3090).", BODY))
+    "same data. All numbers were measured on one machine: Intel Core i9-12900K (x86-64, "
+    "16 cores - 8 performance + 8 efficiency - and 24 threads), 64 GB RAM, NVIDIA GeForce "
+    "RTX 3090 (24 GB); Windows 11, R 4.6.2 with JMbayes2 0.6-5, Python 3.11 with PyTorch "
+    "2.6 (CUDA 12.4).", BODY))
 
 big = sc("R", 10, 3500), sc("Python-GPU", 10, 3500)
 it_r, it_p = sc("R", 5, 28000), sc("Python-GPU", 5, 28000)
