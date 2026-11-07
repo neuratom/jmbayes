@@ -21,9 +21,9 @@ Miranda Afonso: the same model, the same priors and the same MCMC algorithm.
   patients, jmbayes takes 1.4× longer and JMbayes2 3.7× longer
   (see [Benchmarks](#benchmarks)).
 * **The same answers, formally tested.** In equivalence tests against JMbayes2, all 50
-  model parameters agree within 0.2 posterior SD, every regression coefficient leads to
-  the same conclusion, and dynamic predictions match. jmbayes and JMbayes2 differ from
-  each other no more than two JMbayes2 runs with different seeds do.
+  model parameters agree within 0.2 posterior SD and every regression coefficient leads
+  to the same conclusion. jmbayes and JMbayes2 differ from each other no more than two
+  JMbayes2 runs with different seeds do.
 * **A Python interface**, plus JMbayes2-style formula strings if you prefer them.
 
 ## Install
@@ -175,6 +175,14 @@ new["status2"] = 0
 fit.predict(new, times=[5, 6, 7, 8, 10])          # risk of the event by each time
 fit.predict(new, process="longitudinal")          # expected marker values
 ```
+
+To predict, the patient's random effects are sampled given their data so far. jmbayes
+does this step slightly differently from JMbayes2, which we believe weights the
+"event-free so far" information inconsistently (details in
+[NOTES.md](https://github.com/neuratom/jmbayes/blob/main/NOTES.md)). Risks can differ
+from JMbayes2's by a few percentage points for some patients (up to 0.07 for PBC
+patient 93). `fit.predict(..., r_sampling=True)` uses JMbayes2's method; given the same
+posterior draws, it matches JMbayes2's predictions to within 0.01.
 
 ## Your own data
 

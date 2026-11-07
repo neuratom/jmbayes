@@ -346,7 +346,8 @@ class JointModelFit:
     def predict(self, newdata: pd.DataFrame, process: str = "event", times=None,
                 n_samples: int = 200, n_mcmc: int = 55, level: float = 0.95,
                 seed: int = 123, device: str | None = None,
-                type: str = "subject_specific", draws: str = "spread") -> pd.DataFrame:
+                type: str = "subject_specific", draws: str = "spread",
+                r_sampling: bool = False) -> pd.DataFrame:
         """Dynamic predictions for patients in `newdata`, like predict.jm() in R.
 
         newdata: the patients' measurements so far, in the same columns as the fitting
@@ -361,11 +362,14 @@ class JointModelFit:
                  more is cheap and reduces Monte Carlo error).
         draws:   "spread" (default) takes draws evenly over all chains; "first" takes
                  the first n_samples draws, exactly as JMbayes2 does.
+        r_sampling: sample each patient's random effects as JMbayes2's simulate_REs()
+                 does (see NOTES.md). Off by default: jmbayes uses the consistent
+                 survival term, which can change risks by a few percentage points.
         """
         from jmbayes.prediction import predict as _predict
         return _predict(self, newdata, process=process, times=times, n_samples=n_samples,
                         n_mcmc=n_mcmc, level=level, seed=seed, device=device, type=type,
-                        draws=draws)
+                        draws=draws, r_sampling=r_sampling)
 
     # ---- persistence -----------------------------------------------------------
     def save(self, path: str) -> None:

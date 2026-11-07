@@ -1,0 +1,430 @@
+\pdfoutput=1
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+
+\title{\textbf{jmbayes}: data-parallel Bayesian joint models for longitudinal\\
+and time-to-event data, up to 14$\times$ faster than JMbayes2}
+\author{Mo Assaf\\ Neuratom\\ \texttt{assaf@neuratom.ai}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present \textbf{jmbayes}, a data-parallel reimplementation of the R package JMbayes2,
+a widely used tool for Bayesian joint models of longitudinal and time-to-event data. It
+fits the same model, with the same priors and the same Markov chain Monte Carlo (MCMC)
+algorithm, and gives statistically equivalent results, but runs up to 13.7$\times$ faster
+with up to 18$\times$ less memory. For 3,120 patients and 60,000 iterations, JMbayes2 took
+98 minutes and 25.2~GB of RAM; jmbayes took 7 minutes and 1.4~GB. The speed-up grows with
+the problem: 3.3$\times$ on 312 patients, 8--9$\times$ on 1,560--3,120 patients at
+JMbayes2's default run length, and 10.5--13.7$\times$ on long runs with 3,120 patients. jmbayes's memory stayed at
+1.3--1.4~GB of RAM and under 0.2~GB of GPU memory in every run, up to 90,000 iterations,
+while JMbayes2's grew with patients $\times$ iterations beyond the capacity of a typical
+workstation. The gains come from restructuring the computation, not from changing the
+method: chains and patients are processed as data-parallel tensor operations on a GPU
+instead of one process per chain, each iteration is replayed as a recorded CUDA graph, and
+the fit statistics (DIC, WAIC, LPML) are computed exactly from running totals instead of a
+stored per-patient log-likelihood for every draw. In formal equivalence tests on the
+primary biliary cholangitis (PBC) data, all 50 model parameters agreed with JMbayes2 within
+0.2 posterior standard deviations, and the two programs differed from each other less than
+two JMbayes2 runs with different random seeds. jmbayes is open source (GPL-3.0) and
+installable with \texttt{pip install jmbayes}.
+\end{abstract}
+
+\section{Introduction}
+
+Joint models link repeated measurements of a biomarker to the risk of an event, such as
+death or transplantation, through shared random effects
+\cite{tsiatis2004,rizopoulos2012}. They are the standard way to study how a marker's
+trajectory relates to risk, and they give dynamic predictions that update as new
+measurements arrive. The R package JMbayes2 \cite{jmbayes2} fits a broad class of these
+models in a Bayesian framework, with an MCMC sampler written in C++.
+
+Two practical limits appear as studies grow. First, run time: each MCMC iteration updates
+every patient's random effects, and models with several markers often need tens of
+thousands of iterations to converge. Second, memory: JMbayes2 stores the log-likelihood of
+every patient at every iteration to compute fit statistics after sampling, so its memory
+grows with patients $\times$ iterations. In practice, long runs on cohorts of a few
+thousand patients no longer fit in the memory of a typical 16~GB workstation.
+
+jmbayes removes both limits without changing the statistical method. It is a port of
+JMbayes2's sampler, step by step, to PyTorch \cite{pytorch}, restructured so that the work
+of each iteration runs as data-parallel operations. On the same machine, it was up to
+13.7$\times$ faster than JMbayes2, an order of magnitude on long runs with large cohorts,
+and its memory barely grew with run length. We show with formal equivalence tests that
+it gives the same results as JMbayes2 within Monte Carlo error.
+
+\section{Model}
+
+For patient $i$ and marker $k$, the longitudinal sub-model is a generalised linear mixed
+model,
+\[
+  g_k\{E(y_{ik}(t) \mid b_{ik})\} = \eta_{ik}(t) = x_{ik}(t)^\top \beta_k + z_{ik}(t)^\top b_{ik},
+  \qquad b_i = (b_{i1}, \dots, b_{iK}) \sim N(0, D),
+\]
+with an identity link for continuous markers and a logit link for binary ones. The hazard of
+the event is
+\[
+  h_i(t) = h_0(t) \exp\Big\{ \gamma^\top w_i + \sum_{k} \alpha_k\, f_k(\eta_{ik}, t) \Big\},
+\]
+where $w_i$ are baseline covariates and $f_k$ is the functional form that links marker $k$
+to the hazard: its current value $\eta_{ik}(t)$, its slope, or its cumulative area. The log
+baseline hazard is a B-spline with a penalised (random-walk) prior whose precision is
+estimated. Priors, starting values and all MCMC updates follow JMbayes2: a
+Metropolis-within-Gibbs sampler with adaptive random-walk proposals for the random effects,
+fixed effects without a matching random effect, association parameters and spline
+coefficients, and Gibbs or Metropolis steps for the covariance matrix $D$ and the residual
+variances. Hierarchical centring of the fixed effects is applied as in JMbayes2.
+
+\section{Methodology}
+
+\paragraph{Where the parallelism is.} We began by classifying the work in one MCMC
+iteration by the kind of parallelism it allows. The parameter blocks (random effects,
+covariance matrix, fixed effects, residual variances, baseline hazard, survival and
+association coefficients) must be updated in order, because each update conditions on the
+latest values of the others, and iterations must run one after another, because the chain
+is Markov. That part is sequential. Within each block, however, the same arithmetic is
+applied to many independent units: every patient's random effects are updated with the
+same proposal and acceptance rule, every observation's linear predictor and likelihood term
+has the same form, and the survival integral is evaluated at the same quadrature points for
+every patient. This is data parallelism: one instruction stream applied to many data
+elements (SIMD, or SIMT on a GPU). The chains add a second level: they are fully
+independent, so they are task parallelism (MIMD).
+
+JMbayes2 exploits only the MIMD level: it runs each chain in its own R process on its own
+CPU core, and each process loops over patients in compiled C++. With the default 3 chains,
+3 cores are busy whatever the cohort size, and each process keeps its own copy of the data
+and of the stored draws. jmbayes recasts the chains as data parallelism as well: it adds the
+chain as a leading tensor dimension, so a single instruction stream updates all patients of
+all chains at once. On a GPU, with thousands of parallel lanes, an iteration then costs
+almost the same for 312 or 3,120 patients until the device is saturated, which is
+consistent with the 1.4-fold increase in MCMC time we measured for ten times the patients
+(Section~\ref{sec:bench}). On a CPU, the same code uses vector instructions and threads but
+far fewer lanes, which is why the CPU version is not faster than JMbayes2. Because
+iterations themselves cannot be parallelised, the fixed cost of launching many small GPU
+operations in every iteration matters, which led to the use of CUDA graphs (Section~\ref{sec:impl}).
+
+\paragraph{Reuse instead of new compiled code.} JMbayes2 needs its sampler in C++ because
+loops in R are slow. We asked instead which parts of JMbayes2 already have an equivalent in
+the Python scientific stack, and wrote only what was missing. Data handling uses pandas;
+B-spline bases come from SciPy; the linear mixed models that provide starting values and
+centre some priors (R's \texttt{lme}) are fitted with the REML estimator of statsmodels;
+starting values for the logistic model come from a statsmodels GLM; numerical optimisation
+uses SciPy and Gauss--Hermite nodes come from NumPy. Two estimators had no Python version
+with exactly R's behaviour and were written directly: a binomial mixed model by maximum
+likelihood with adaptive Gauss--Hermite quadrature (as in R's \texttt{GLMMadaptive}) and a
+Cox model with Efron's handling of ties (as in R's \texttt{coxph}). The MCMC sampler itself
+is written with PyTorch tensor operations.
+
+This removes the need for any compiled code of our own. Python only orchestrates: every
+numerical operation runs in the compiled back-ends of these libraries, in C++ and CUDA
+for PyTorch and in C and Fortran (BLAS and LAPACK) for NumPy and SciPy. On the GPU, each
+MCMC iteration is a single replay of a recorded CUDA graph, so the Python interpreter is
+not in the inner loop at all. The package is therefore pure Python, distributed as one
+platform-independent wheel that runs wherever PyTorch runs.
+
+\paragraph{Porting and verification.} The sampler was ported from JMbayes2's C++ source
+function by function, keeping the same update order, proposals, adaptation rules and
+priors, so that the only intended difference is the random-number stream. Much of this
+translation was done with the assistance of Claude, a large language model from
+Anthropic, which also identified the SIMD and MIMD parallelism opportunities described
+above. The author reviewed the code, and correctness was established empirically rather
+than assumed from the translation: unit tests compare the design matrices, starting
+fits and priors with JMbayes2's output, and the full model was tested for statistical equivalence with JMbayes2
+(Section~\ref{sec:equiv}). Where the port revealed inconsistencies in JMbayes2's own code,
+we reproduced them in the sampler so that results stay comparable, and documented them.
+
+\section{Implementation}\label{sec:impl}
+
+\paragraph{Batched chains and patients.} Every quantity is stored with a leading chain
+dimension, and all patients' random effects of all chains are updated in one tensor
+operation. Marker trajectories are updated incrementally when random effects change
+instead of being rebuilt.
+
+\paragraph{CUDA graphs.} An MCMC iteration launches many small GPU kernels. jmbayes records
+one full iteration as a CUDA graph the first time it runs and replays the recorded graph
+afterwards, which avoids most of the per-kernel launch overhead. All state stays on the GPU; only the
+kept parameter draws are copied back.
+
+\paragraph{Fit statistics without the log-likelihood table.} Let $\ell_i^{(s)}$ be the
+log-likelihood of patient $i$ (markers, event and random effects) at kept draw $s$, for
+$s = 1, \dots, S$. JMbayes2 stores the $S \times n$ matrix of $\ell_i^{(s)}$ and computes,
+after sampling,
+\begin{align*}
+  \mathrm{DIC} &= \bar{D} + p_D, \quad \bar{D} = -\tfrac{2}{S} \textstyle\sum_s \sum_i \ell_i^{(s)},
+    \quad p_D = \bar{D} - D(\bar\theta), \\
+  \mathrm{WAIC} &= -2 \textstyle\sum_i \log\big( \tfrac{1}{S} \sum_s e^{\ell_i^{(s)}} \big)
+    + 2 \sum_i \operatorname{Var}_s\big(\ell_i^{(s)}\big), \\
+  \mathrm{LPML} &= \textstyle\sum_i \log \mathrm{CPO}_i, \quad
+    \mathrm{CPO}_i = \big( \tfrac{1}{S} \sum_s e^{-\ell_i^{(s)}} \big)^{-1}
+\end{align*}
+\cite{spiegelhalter2002,watanabe2010,geisser1979}. Each of these needs only a few running
+totals per patient: $\sum_s \ell_i^{(s)}$; $\log \sum_s e^{\ell_i^{(s)}}$ and
+$\log \sum_s e^{-\ell_i^{(s)}}$, accumulated on the log scale with a stable log-add-exp
+(the exponentials themselves under- or overflow); and the variance of $\ell_i^{(s)}$,
+accumulated with Welford's algorithm \cite{welford1962} and combined across chains with the
+pairwise formula of Chan et al.\ \cite{chan1983}. jmbayes updates these totals at every
+kept draw and never stores the matrix, so memory depends on the number of patients but not
+on the run length. The totals are kept in 64-bit precision; the values agree with those
+computed from the full matrix to within $10^{-8}$ relative error. For analyses that need
+every draw, such as PSIS-LOO and its Pareto-$k$ diagnostic \cite{vehtari2017}, the matrix
+can still be kept with \texttt{fit(..., save\_loglik=True)}.
+
+\paragraph{Precision.} jmbayes samples in 32-bit floating point by default and refits
+automatically in 64-bit if a run produces invalid values. Over 9 matched benchmark settings
+on the GPU, 32-bit was 1.67$\times$ faster than 64-bit (geometric mean; 95\% CI
+1.49--1.86), and its results were equivalent to JMbayes2 in the same tests as 64-bit
+(Section~\ref{sec:equiv}). We rejected bfloat16: it keeps only 8 significant bits, so near a
+log-likelihood of 1,000 neighbouring representable values are 4 apart, too coarse for MCMC
+acceptance decisions.
+
+\paragraph{Deliberate differences.} While porting we found three places where JMbayes2's
+C++ code appears inconsistent. Two affect the sampler (a random-effects density not
+refreshed after the fixed-effects update, and a survival denominator not refreshed after
+the smoothing-parameter update); jmbayes reproduces both so that results match. The third
+affects dynamic prediction: when sampling a new patient's random effects, JMbayes2 scales
+the survival term differently from the code that then computes the risk. jmbayes uses the
+consistent version by default and reproduces JMbayes2's with
+\texttt{predict(..., r\_sampling=True)}.
+
+\paragraph{Interface.} Models are written with Python objects
+(\texttt{Marker}, \texttt{Event}, \texttt{JointModel}) or with JMbayes2-style formula
+strings; both build the same model and give identical draws. jmbayes does not impute or
+silently drop data: missing or invalid values stop the fit with a message naming the
+columns.
+
+\section{Equivalence with JMbayes2}\label{sec:equiv}
+
+\paragraph{Setup.} We used the PBC data \cite{murtaugh1994} (312 patients, 1,945 visits,
+169 deaths or transplants) and the model from the JMbayes2 documentation: a survival model
+with sex, linked through the current value of log serum bilirubin and prothrombin time
+(linear mixed models) and ascites (logistic mixed model), each with a random intercept and
+slope. Each program was run twice with different seeds, with 12 chains of 30,000 iterations
+(5,000 burn-in), giving 300,000 kept draws per run.
+
+\paragraph{Error bars.} To compare MCMC estimates we need their Monte Carlo standard errors
+(MCSE). Comparing two runs of the same program, the MCSE reported by JMbayes2 understated
+the real run-to-run error: only 80\% (R) and 88\% (Python) of differences fell within
+$\pm 2$ MCSE. We therefore inflated all MCSEs by the factor $k = 1.40$ estimated from these
+same-program pairs; the correction applies equally to both programs.
+
+\paragraph{Test.} For each of the 50 parameters, $d$ is the difference between the jmbayes
+and JMbayes2 posterior means (each pooled over its two runs). The programs are declared
+equivalent for that parameter if the 90\% confidence interval of $d$ lies within $\pm\delta$
+(two one-sided tests at $\alpha = 0.05$ \cite{schuirmann1987}), with $\delta$ equal to 0.1
+or 0.2 posterior standard deviations (SD).
+
+\paragraph{Results.} All 50 parameters were equivalent at $\pm 0.2$~SD and 43 at
+$\pm 0.1$~SD; none was shown to differ. The median absolute difference between jmbayes and
+JMbayes2 was 0.011~SD (largest 0.042), smaller than between two JMbayes2 runs (0.023~SD,
+largest 0.141) and two jmbayes runs (0.018~SD, largest 0.070). All 15 regression
+coefficients led to the same conclusions in both programs (direction, significance at 5\%,
+and whether the 95\% credible interval excludes zero). Table~\ref{tab:hr} and
+Figure~\ref{fig:forest} show the hazard ratios.
+
+Fit statistics agreed within run-to-run variation (relative differences below 0.3\%).
+Convergence was also the same: the Gelman--Rubin $\hat R$ \cite{gelman1992} of every
+regression coefficient was below 1.05 in all four runs, the largest being 1.043 in both
+programs, for the same parameters (those of the ascites sub-model). With JMbayes2's
+default length (3 chains, 3,500 iterations), neither program converged for the ascites
+parameters, at any cohort size.
+
+For dynamic predictions, we gave jmbayes JMbayes2's own posterior draws; with JMbayes2's
+random-effects sampling (\texttt{r\_sampling=True}), jmbayes's predicted risks matched
+JMbayes2's to within 0.01. With its default, consistent sampling, risks can differ by a few
+percentage points; for PBC patient 93, the one-year risk was 0.63 instead of 0.70.
+
+\begin{table}[t]
+\centering
+\caption{Hazard ratios (posterior mean, 95\% credible interval) from the same model and
+data. Markers act through their current value.}
+\label{tab:hr}
+\vspace{4pt}
+\begin{tabular}{lcc}
+\toprule
+Effect on the hazard of death or transplantation & JMbayes2 & jmbayes \\
+\midrule
+Female sex & 0.52 (0.26--1.03) & 0.51 (0.25--1.03) \\
+log serum bilirubin (per unit) & 1.68 (1.18--2.33) & 1.68 (1.18--2.31) \\
+Prothrombin time (per second) & 1.01 (0.79--1.25) & 1.00 (0.78--1.25) \\
+Ascites (per unit log-odds) & 1.77 (1.40--2.39) & 1.77 (1.40--2.40) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.8\linewidth]{figures/forest.png}
+\caption{Hazard ratios with 95\% credible intervals from JMbayes2 and jmbayes.}
+\label{fig:forest}
+\end{figure}
+
+\section{Speed and memory}\label{sec:bench}
+
+\paragraph{Setup.} To vary the cohort size, the PBC data were copied 1, 2, 5 and 10 times
+with new patient identifiers (312 to 3,120 patients). We fitted the same model with 3
+chains (burn-in 500, thinning 5) at 3,500 iterations (JMbayes2's default) and, for 1,560
+and 3,120 patients, up to 90,000 iterations. Each run was a separate process, run one at a
+time. Peak RAM is the resident memory of the whole process tree, sampled every 0.2~s, which
+includes JMbayes2's worker processes (one per chain). MCMC time excludes the initial
+separate model fits, which both programs need. JMbayes2 runs its chains in parallel on the
+CPU; jmbayes ran on the GPU in 32-bit precision. All runs used one machine: Intel Core
+i9-12900K (x86-64; 16 cores, 8 performance and 8 efficiency, 24 threads), 64~GB RAM, NVIDIA
+GeForce RTX 3090 (24~GB), Windows 11, R 4.6.2 with JMbayes2 0.6-5, Python 3.11 with PyTorch
+2.6 (CUDA 12.4).
+
+\paragraph{Results.} Table~\ref{tab:bench} and Figure~\ref{fig:bench} show the results.
+jmbayes was 3.3$\times$ faster on 312 patients and 8.0--8.6$\times$ faster on 1,560--3,120
+patients at the default length. The gap grew with run length: at 60,000 iterations for
+3,120 patients, JMbayes2 took 98 minutes and 25.2~GB of RAM, and jmbayes 7 minutes and
+1.4~GB. Ten times more patients increased jmbayes's MCMC time 1.4-fold and JMbayes2's
+3.7-fold. jmbayes's RAM stayed at 1.3--1.4~GB and its GPU memory below 0.2~GB in every
+run, up to 90,000 iterations, while JMbayes2's memory grew with both patients and
+iterations.
+
+The speed comes from the GPU. Run on the CPU alone, jmbayes was about as fast as JMbayes2
+on small cohorts and slower on large ones (445~s vs 202~s for 3,120 patients at 3,500
+iterations), but used less than half the memory (0.6--0.7~GB).
+
+\begin{table}[t]
+\centering
+\caption{MCMC time and peak RAM. jmbayes on the GPU in 32-bit precision; JMbayes2 on the
+CPU. Dashes: not run.}
+\label{tab:bench}
+\vspace{4pt}
+\begin{tabular}{rrrrrrr}
+\toprule
+& & \multicolumn{2}{c}{JMbayes2} & \multicolumn{2}{c}{jmbayes} & \\
+\cmidrule(lr){3-4}\cmidrule(lr){5-6}
+Patients & Iterations & Time & RAM & Time & RAM & Speed-up \\
+\midrule
+312   & 3,500  & 55 s    & 1.28 GB & 17 s  & 1.28 GB & 3.3$\times$ \\
+624   & 3,500  & 87 s    & 1.45 GB & 17 s  & 1.28 GB & 5.0$\times$ \\
+1,560 & 3,500  & 157 s   & 1.95 GB & 20 s  & 1.29 GB & 8.0$\times$ \\
+3,120 & 3,500  & 202 s   & 2.41 GB & 24 s  & 1.31 GB & 8.6$\times$ \\
+1,560 & 7,000  & 237 s   & 2.34 GB & 41 s  & 1.29 GB & 5.8$\times$ \\
+1,560 & 14,000 & 716 s   & 3.36 GB & 82 s  & 1.30 GB & 8.8$\times$ \\
+1,560 & 28,000 & 1,046 s & 6.25 GB & 164 s & 1.31 GB & 6.4$\times$ \\
+3,120 & 7,000  & 450 s   & 3.44 GB & 48 s  & 1.31 GB & 9.4$\times$ \\
+3,120 & 14,000 & 521 s   & 6.15 GB & 96 s  & 1.32 GB & 5.4$\times$ \\
+3,120 & 28,000 & 2,056 s & 12.0 GB & 196 s & 1.33 GB & 10.5$\times$ \\
+3,120 & 60,000 & 5,893 s & 25.2 GB & 429 s & 1.39 GB & 13.7$\times$ \\
+1,560 & 90,000 & --      & --      & 529 s & 1.36 GB & \\
+3,120 & 90,000 & --      & --      & 643 s & 1.38 GB & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/benchmarks.png}
+\caption{MCMC time (top) and peak memory (bottom) as the number of patients (left, 3,500
+iterations) and the number of iterations (right; light lines 1,560 patients, dark lines
+3,120) grow. Dotted: jmbayes GPU memory.}
+\label{fig:bench}
+\end{figure}
+
+\section{Limitations}
+
+Each benchmark setting was run once, so single timings carry noise; for example, JMbayes2
+took less time for 3,120 patients at 14,000 iterations than for 1,560. Larger cohorts were
+made by copying one data set, which tests scaling but not new data. Equivalence was tested
+in depth on one model and data set; three further models (splines, slope and area
+associations, fixed effects without random effects) agreed in smaller tests. The speed-up
+needs an NVIDIA GPU. jmbayes does not yet cover all of JMbayes2: it supports Gaussian and
+binomial markers, value, slope and area associations, and right censoring, but not other
+outcome families, competing risks, strata, left truncation or interval censoring, and it
+does not compute marginal fit statistics. Unsupported models stop with an error rather
+than fitting a different model.
+
+\section{Availability}
+
+jmbayes 0.5.0 is available from PyPI (\texttt{pip install jmbayes}) and at
+\url{https://github.com/neuratom/jmbayes} under the GPL-3.0 licence, like JMbayes2. The
+repository contains the scripts and results for every number in this paper, including the
+full equivalence report. jmbayes is an independent reimplementation and is not affiliated
+with or endorsed by the authors of JMbayes2, whose work it builds on.
+
+\begin{thebibliography}{99}
+
+\bibitem{jmbayes2}
+D.~Rizopoulos, G.~Papageorgiou and P.~Miranda Afonso.
+\newblock JMbayes2: Extended joint models for longitudinal and time-to-event data.
+\newblock R package, \url{https://github.com/drizopoulos/JMbayes2}.
+
+\bibitem{rizopoulos2012}
+D.~Rizopoulos.
+\newblock \emph{Joint Models for Longitudinal and Time-to-Event Data: With Applications
+in R}.
+\newblock Chapman \& Hall/CRC, 2012.
+
+\bibitem{tsiatis2004}
+A.~A. Tsiatis and M.~Davidian.
+\newblock Joint modeling of longitudinal and time-to-event data: an overview.
+\newblock \emph{Statistica Sinica}, 14:809--834, 2004.
+
+\bibitem{pytorch}
+A.~Paszke et al.
+\newblock PyTorch: an imperative style, high-performance deep learning library.
+\newblock In \emph{Advances in Neural Information Processing Systems 32}, 2019.
+
+\bibitem{spiegelhalter2002}
+D.~J. Spiegelhalter, N.~G. Best, B.~P. Carlin and A.~van~der Linde.
+\newblock Bayesian measures of model complexity and fit.
+\newblock \emph{Journal of the Royal Statistical Society: Series B}, 64(4):583--639, 2002.
+
+\bibitem{watanabe2010}
+S.~Watanabe.
+\newblock Asymptotic equivalence of Bayes cross validation and widely applicable
+information criterion in singular learning theory.
+\newblock \emph{Journal of Machine Learning Research}, 11:3571--3594, 2010.
+
+\bibitem{geisser1979}
+S.~Geisser and W.~F. Eddy.
+\newblock A predictive approach to model selection.
+\newblock \emph{Journal of the American Statistical Association}, 74(365):153--160, 1979.
+
+\bibitem{welford1962}
+B.~P. Welford.
+\newblock Note on a method for calculating corrected sums of squares and products.
+\newblock \emph{Technometrics}, 4(3):419--420, 1962.
+
+\bibitem{chan1983}
+T.~F. Chan, G.~H. Golub and R.~J. LeVeque.
+\newblock Algorithms for computing the sample variance: analysis and recommendations.
+\newblock \emph{The American Statistician}, 37(3):242--247, 1983.
+
+\bibitem{vehtari2017}
+A.~Vehtari, A.~Gelman and J.~Gabry.
+\newblock Practical Bayesian model evaluation using leave-one-out cross-validation and
+WAIC.
+\newblock \emph{Statistics and Computing}, 27:1413--1432, 2017.
+
+\bibitem{murtaugh1994}
+P.~A. Murtaugh, E.~R. Dickson, G.~M. Van~Dam, M.~Malinchoc, P.~M. Grambsch, A.~L.
+Langworthy and C.~H. Gips.
+\newblock Primary biliary cirrhosis: prediction of short-term survival based on repeated
+patient visits.
+\newblock \emph{Hepatology}, 20(1):126--134, 1994.
+
+\bibitem{schuirmann1987}
+D.~J. Schuirmann.
+\newblock A comparison of the two one-sided tests procedure and the power approach for
+assessing the equivalence of average bioavailability.
+\newblock \emph{Journal of Pharmacokinetics and Biopharmaceutics}, 15(6):657--680, 1987.
+
+\bibitem{gelman1992}
+A.~Gelman and D.~B. Rubin.
+\newblock Inference from iterative simulation using multiple sequences.
+\newblock \emph{Statistical Science}, 7(4):457--472, 1992.
+
+\end{thebibliography}
+
+\end{document}
