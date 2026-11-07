@@ -62,6 +62,8 @@ def r_jitter(x: np.ndarray, rng: np.random.Generator, factor=2.0) -> np.ndarray:
 
 
 class JointModelSampler:
+    _save_ll, _ll_burnin = False, 0
+
     def __init__(self, md: ModelData, n_chains=3, device=None, seed=123,
                  replicate_quirks=True, dtype=torch.float64, cuda_graphs=True,
                  cpu_threads=1):
@@ -274,6 +276,8 @@ class JointModelSampler:
         s["lse_pos"] = torch.full((C, self.n), -math.inf, dtype=dt, device=dev)
         s["lse_neg"] = torch.full((C, self.n), -math.inf, dtype=dt, device=dev)
         s["it"] = torch.zeros(1, dtype=torch.long, device=dev)
+        if self._save_ll:          # optional: log-likelihood per patient per kept iteration
+            s["r_ll"] = z(n_iter - self._ll_burnin, C, self.n)
         return s
 
     def refresh_long(self, s):
@@ -581,6 +585,7 @@ class JointModelSampler:
         s["st_m2"] = s["st_m2"] + k * d * (ll - s["st_mean"])
         s["lse_pos"] = torch.where(keep, torch.logaddexp(s["lse_pos"], ll), s["lse_pos"])
         s["lse_neg"] = torch.where(keep, torch.logaddexp(s["lse_neg"], -ll), s["lse_neg"])
+        return ll
 
     # ------------------------------------------------------------- one iteration
     def step(self, s, full, n_burnin):
@@ -604,7 +609,9 @@ class JointModelSampler:
             self.update_sigmas(s, itf)
             self.refresh_long(s)
             s["sum_b"] = s["sum_b"] + keep.to(self.dt) * s["b"]
-        self.accumulate(s, keep)
+        ll = self.accumulate(s, keep)
+        if "r_ll" in s:            # burn-in iterations write row 0, overwritten when kept
+            s["r_ll"].index_copy_(0, torch.clamp(s["it"] - n_burnin, min=0), ll[None])
 
     # ------------------------------------------------------------- CUDA graphs
     def _capture(self, s, n_burnin):
@@ -640,7 +647,11 @@ class JointModelSampler:
 
     # ------------------------------------------------------------- run
     @torch.no_grad()
-    def run(self, n_iter=3500, n_burnin=500, progress=True):
+    def run(self, n_iter=3500, n_burnin=500, progress=True, save_loglik=False):
+        """save_loglik: also return the log-likelihood of each patient at every iteration
+        after burn-in (as JMbayes2's save_logLik_contributions). It takes
+        (n_iter - n_burnin) x chains x patients numbers of device memory."""
+        self._save_ll, self._ll_burnin = save_loglik, n_burnin
         s = self.init_state(n_iter)
         t0 = _time.perf_counter()
         graphs = self._capture(s, n_burnin) if self.use_graphs else None
@@ -674,6 +685,9 @@ class JointModelSampler:
                                    lse_pos=s["lse_pos"].cpu().numpy(),
                                    lse_neg=s["lse_neg"].cpu().numpy())
         out["n_keep"] = int(s["n_keep"].item())
+        if "r_ll" in s:            # (chains, iterations, patients)
+            out["loglik"] = np.ascontiguousarray(np.swapaxes(s["r_ll"].cpu().numpy(), 0, 1))
+            del s["r_ll"]
         out["elapsed"] = elapsed
         out["capture_time"] = t_capture
         out["device"] = str(self.dev)

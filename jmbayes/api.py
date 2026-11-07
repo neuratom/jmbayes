@@ -139,7 +139,7 @@ class JointModel:
             n_chains: int = 3, seed: int = 123, device: str | None = None,
             base_hazard_segments: int = 9, Bsplines_degree: int = 2,
             initial_fits: dict | None = None, dtype: str = "float32",
-            verbose: bool = True) -> "JointModelFit":
+            save_loglik: bool = False, verbose: bool = True) -> "JointModelFit":
         """Fit by MCMC, with the same priors and sampler as JMbayes2::jm().
 
         visits:   one row per measurement (id, visit time, markers, covariates)
@@ -151,13 +151,20 @@ class JointModel:
         dtype:    precision of the MCMC: "float32" (default; 1.4-1.7x faster on a GPU,
                   shown statistically equivalent to JMbayes2) or "float64" (as JMbayes2).
                   If a float32 run produces invalid numbers it is redone in float64.
+        save_loglik: also keep each patient's log-likelihood at every iteration after
+                  burn-in, as fit.loglik (chains x iterations x patients), like JMbayes2's
+                  save_logLik_contributions. Off by default: DIC, WAIC and LPML are computed
+                  either way, and the table needs (n_iter - n_burnin) x n_chains x patients
+                  numbers of memory (e.g. 2.2 GB for 2,000 patients, 3 chains, 90,000
+                  iterations in float32). Use it for checks that need every draw, such as
+                  PSIS-LOO and its Pareto-k diagnostic.
         initial_fits: optional separate fits exported from R (benchmark/export_initfits.R)
         """
         return _fit(self, visits, patients, n_iter=n_iter, n_burnin=n_burnin, n_thin=n_thin,
                     n_chains=n_chains, seed=seed, device=device,
                     base_hazard_segments=base_hazard_segments,
                     Bsplines_degree=Bsplines_degree, initial_fits=initial_fits,
-                    dtype=dtype, verbose=verbose)
+                    dtype=dtype, save_loglik=save_loglik, verbose=verbose)
 
 
 # =========================================================== R-style strings
@@ -225,7 +232,16 @@ class JointModelFit:
     settings: dict
     timing: dict
     random_effects_mean: np.ndarray
+    loglik: np.ndarray | None = field(default=None, repr=False)
+    """Log-likelihood of each patient at every iteration after burn-in, shape
+    (chains, iterations, patients), patients in the order of .patient_ids. Only kept
+    with fit(..., save_loglik=True); None otherwise."""
     _tables: dict = field(default_factory=dict, repr=False)
+
+    @property
+    def patient_ids(self) -> list:
+        """Patient ids in the order used by .loglik and the random effects."""
+        return list(self.md.sid_names)
 
     # ---- tables ------------------------------------------------------------
     def _table(self, block: str) -> pd.DataFrame:
@@ -450,7 +466,8 @@ def jm(survival: Survival, longitudinal: list[Longitudinal] | Longitudinal,
 
 
 def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_chains, seed,
-         device, base_hazard_segments, Bsplines_degree, initial_fits, dtype, verbose):
+         device, base_hazard_segments, Bsplines_degree, initial_fits, dtype, verbose,
+         save_loglik=False):
     dt = _DTYPES.get(str(dtype).replace("torch.", ""))
     if dt is None:
         raise ValueError(f"dtype must be 'float64' or 'float32', got {dtype!r} (16-bit "
@@ -485,7 +502,8 @@ def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_cha
         if verbose:
             print(f"setup done in {t_setup:.1f}s; sampling on {smp.dev} "
                   f"({str(dt).replace('torch.', '')}) ...", flush=True)
-        out = smp.run(n_iter=n_iter, n_burnin=n_burnin, progress=verbose)
+        out = smp.run(n_iter=n_iter, n_burnin=n_burnin, progress=verbose,
+                      save_loglik=save_loglik)
         blocks = sm.collect(md, out, n_thin=n_thin)
         if dt == torch.float64 or all(np.isfinite(v[0]).all() for v in blocks.values()):
             break
@@ -500,4 +518,4 @@ def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_cha
                       seed=seed, dtype=str(dt).replace("torch.", "")),
         timing=dict(setup=t_setup, mcmc=out["elapsed"], device=out["device"],
                     gpu_peak_mb=out["gpu_peak_mb"]),
-        random_effects_mean=out["mean_b"].mean(0))
+        random_effects_mean=out["mean_b"].mean(0), loglik=out.get("loglik"))

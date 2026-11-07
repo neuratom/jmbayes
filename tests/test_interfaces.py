@@ -90,3 +90,28 @@ def test_missing_marker_value_means_not_measured(pbc2_data):
                          id="id", time="year").fit(pbc2, pid, n_iter=150, n_burnin=110,
                                                    device="cpu", verbose=False)
     assert len(fit.md.outcomes[0].y) == pbc2["ascites"].notna().sum()
+
+
+def test_saved_loglik_table_reproduces_fit_statistics(pbc2_data):
+    """save_loglik=True keeps the per-patient table; WAIC and LPML computed from it equal
+    the ones jmbayes computes from running totals. By default nothing is kept."""
+    from scipy.special import logsumexp
+    pbc2, pid = pbc2_data
+    model = jmb.JointModel(jmb.Event("years", "status2", "sex"),
+                           jmb.Marker(var("serBilir").log(), fixed=var("year"),
+                                      random=var("year")),
+                           id="id", time="year")
+    opts = dict(n_iter=300, n_burnin=100, n_chains=2, device="cpu", verbose=False)
+    assert model.fit(pbc2, pid, **opts).loglik is None
+    for dtype in ("float64", "float32"):
+        fit = model.fit(pbc2, pid, save_loglik=True, dtype=dtype, **opts)
+        ll = fit.loglik
+        assert ll.shape == (2, 200, len(pid)) and np.isfinite(ll).all()
+        assert len(fit.patient_ids) == len(pid)
+        x = ll.reshape(-1, ll.shape[2]).astype(np.float64)       # draws x patients
+        N = x.shape[0]
+        lpml = np.sum(np.log(N) - logsumexp(-x, axis=0))
+        waic = -2 * np.sum(logsumexp(x, axis=0) - np.log(N)) + 2 * np.sum(x.var(0, ddof=1))
+        tol = 1e-8 if dtype == "float64" else 1e-4
+        assert np.isclose(lpml, fit.fit_statistics["LPML"], rtol=tol), dtype
+        assert np.isclose(waic, fit.fit_statistics["WAIC"], rtol=tol), dtype

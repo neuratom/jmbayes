@@ -201,8 +201,17 @@ jmb.JointModel(..., independent="all")               # markers independent of ea
 model.fit(visits, patients,
           n_iter=12000, n_burnin=2000, n_thin=5,     # MCMC length (default 3500 / 500 / 1)
           n_chains=3,                                # more chains are cheap on a GPU
-          device="cpu")                              # default: GPU if available
+          device="cpu",                              # default: GPU if available
+          save_loglik=True)                          # keep the per-patient table (below)
 ```
+
+DIC, WAIC and LPML are always computed, from running totals, so jmbayes does not need to
+keep each patient's log-likelihood at every iteration (the table that makes JMbayes2's
+memory grow). If you want that table, for example for PSIS-LOO with its Pareto-k
+diagnostic, pass `save_loglik=True`: `fit.loglik` is then an array of
+chains × iterations × patients (patients in the order of `fit.patient_ids`). It takes
+(iterations − burn-in) × chains × patients numbers of memory, e.g. 2.2 GB for 2,000 patients,
+3 chains and 90,000 iterations.
 
 Check convergence in `fit.survival_table()`: `Rhat` should be below about 1.05. If not,
 run longer or with more chains.
