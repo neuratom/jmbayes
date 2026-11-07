@@ -41,6 +41,11 @@ def test_python_interface_errors(pbc2_data):
         jmb.Marker("serBilir", association="velocity")
     with pytest.raises(TypeError):
         jmb.Marker(var("serBilir"))           # a term, not a response
+    with pytest.raises(ValueError, match="16-bit"):
+        pbc2, pid = pbc2_data
+        jmb.JointModel(jmb.Event("years", "status2", "sex"), jmb.Marker("albumin"),
+                       id="id", time="year").fit(pbc2, pid, n_iter=200, n_burnin=100,
+                                                 dtype="bfloat16", verbose=False)
     with pytest.raises(jmb.DataError):
         pbc2, pid = pbc2_data
         jmb.JointModel(jmb.Event("years", "status2", "sex"),

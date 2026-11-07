@@ -5,3 +5,5 @@ stopped old queue
 R          patients= 1872 iters= 30000  wall  1519.4s  MCMC  1272.6s  peak RAM  7.94 GB
 Python-GPU patients= 3120 iters=  7000  wall   223.9s  MCMC    93.8s  peak RAM  1.24 GB
 Python-GPU patients= 3120 iters= 14000  wall  1890.3s  MCMC  1682.5s  peak RAM  1.77 GB
+Python-GPU patients= 3120 iters= 14000  wall   321.9s  MCMC   190.4s  peak RAM  1.25 GB
+paused (delete benchmark/PAUSE and rerun to continue)

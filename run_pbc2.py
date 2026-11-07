@@ -17,6 +17,7 @@ import pathlib
 import time
 
 import pandas as pd
+import torch
 import jmbayes as jmb
 from jmbayes import var
 
@@ -47,6 +48,8 @@ def main():
     ap.add_argument("--replicate", type=int, default=1,
                     help="copy pbc2 this many times with new ids (benchmarking larger data)")
     ap.add_argument("--out", default=str(HERE / "results_pbc2.json"))
+    ap.add_argument("--dtype", default="float32", choices=["float64", "float32"],
+                    help="floating-point precision of the sampler")
     a = ap.parse_args()
 
     pbc2, pbc2_id = jmb.datasets.pbc2()
@@ -72,7 +75,8 @@ def main():
     t_setup = time.perf_counter() - t0
     print(f"setup (initial fits + design matrices): {t_setup:.1f}s")
 
-    smp = JointModelSampler(md, n_chains=a.n_chains, device=a.device, seed=a.seed)
+    smp = JointModelSampler(md, n_chains=a.n_chains, device=a.device, seed=a.seed,
+                            dtype=getattr(torch, a.dtype))
     print(f"running on {smp.dev}")
     out = smp.run(n_iter=a.n_iter, n_burnin=a.n_burnin)
     blocks = sm.collect(md, out, n_thin=a.n_thin)

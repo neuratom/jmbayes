@@ -1,4 +1,4 @@
-# jmbayes
+# `jmbayes`: JMBayes2 Accelerated Python Implementation
 
 Bayesian joint models for longitudinal and time-to-event data in Python and PyTorch,
 based on the R package [JMbayes2](https://github.com/drizopoulos/JMbayes2) by

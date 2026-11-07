@@ -8,6 +8,7 @@ Grid
   patients:   pbc2 copied 1, 2, 5, 10 times (312 .. 3,120 patients), 3,500 iterations
   iterations: 3,500 .. 90,000 iterations at 5 and 10 copies (1,560 and 3,120 patients)
 Every job uses 3 chains, burn-in 500, thinning 5 (JMbayes2's defaults except n_iter).
+jmbayes runs in float32, its default; earlier float64 results are kept in float64/.
 
 Usage: python scaling.py            (appends to scaling_results.jsonl, skips done jobs)
 
@@ -81,7 +82,8 @@ def main():
             else:
                 cmd = [PY, str(HERE.parent / "run_pbc2.py"), "--device", "cuda",
                        "--replicate", str(k), "--n-iter", str(n_iter),
-                       "--n-burnin", str(BURNIN), "--out", str(res_file)]
+                       "--n-burnin", str(BURNIN), "--dtype", "float32",
+                       "--out", str(res_file)]
             wall, peak_gb = run(cmd, HERE)
             t = json.loads(res_file.read_text())["timing"]
             rec = dict(impl=impl, k=k, patients=312 * k, n_iter=n_iter, wall_s=wall,

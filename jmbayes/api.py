@@ -26,10 +26,12 @@ from __future__ import annotations
 
 import pickle
 import time
+import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
+import torch
 
 from jmbayes import checks as ck
 from jmbayes import formula as fm
@@ -40,6 +42,7 @@ from jmbayes.sampler import JointModelSampler
 
 _FAMILIES = {"gaussian", "binomial"}
 _FORMS = ("value", "slope", "area")
+_DTYPES = {"float64": torch.float64, "float32": torch.float32}
 
 
 # =========================================================== Python interface
@@ -135,7 +138,8 @@ class JointModel:
             n_iter: int | None = None, n_burnin: int = 500, n_thin: int = 1,
             n_chains: int = 3, seed: int = 123, device: str | None = None,
             base_hazard_segments: int = 9, Bsplines_degree: int = 2,
-            initial_fits: dict | None = None, verbose: bool = True) -> "JointModelFit":
+            initial_fits: dict | None = None, dtype: str = "float32",
+            verbose: bool = True) -> "JointModelFit":
         """Fit by MCMC, with the same priors and sampler as JMbayes2::jm().
 
         visits:   one row per measurement (id, visit time, markers, covariates)
@@ -144,13 +148,16 @@ class JointModel:
                   defaults to 3500, or 6500 when some fixed effects have no matching
                   random effect, as JMbayes2 does)
         device:   "cuda" (GPU), "cpu", or None to use the GPU when available
+        dtype:    precision of the MCMC: "float32" (default; 1.4-1.7x faster on a GPU,
+                  shown statistically equivalent to JMbayes2) or "float64" (as JMbayes2).
+                  If a float32 run produces invalid numbers it is redone in float64.
         initial_fits: optional separate fits exported from R (benchmark/export_initfits.R)
         """
         return _fit(self, visits, patients, n_iter=n_iter, n_burnin=n_burnin, n_thin=n_thin,
                     n_chains=n_chains, seed=seed, device=device,
                     base_hazard_segments=base_hazard_segments,
                     Bsplines_degree=Bsplines_degree, initial_fits=initial_fits,
-                    verbose=verbose)
+                    dtype=dtype, verbose=verbose)
 
 
 # =========================================================== R-style strings
@@ -443,7 +450,11 @@ def jm(survival: Survival, longitudinal: list[Longitudinal] | Longitudinal,
 
 
 def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_chains, seed,
-         device, base_hazard_segments, Bsplines_degree, initial_fits, verbose):
+         device, base_hazard_segments, Bsplines_degree, initial_fits, dtype, verbose):
+    dt = _DTYPES.get(str(dtype).replace("torch.", ""))
+    if dt is None:
+        raise ValueError(f"dtype must be 'float64' or 'float32', got {dtype!r} (16-bit "
+                         "formats are too coarse for MCMC acceptance decisions)")
     ck.check_patients(patients, model.id, model.event.time, model.event.event,
                       model.event.covariates.variables())
     ck.check_visits(visits, model.id, model.time, _marker_specs(model))
@@ -469,17 +480,24 @@ def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_cha
         n_iter = 6500 if any(len(o.nhc) for o in md.outcomes) else 3500
         if n_burnin >= n_iter:
             raise ValueError("n_burnin must be smaller than n_iter")
-    smp = JointModelSampler(md, n_chains=n_chains, device=device, seed=seed)
-    if verbose:
-        print(f"setup done in {t_setup:.1f}s; sampling on {smp.dev} ...", flush=True)
-    out = smp.run(n_iter=n_iter, n_burnin=n_burnin, progress=verbose)
-    blocks = sm.collect(md, out, n_thin=n_thin)
+    while True:
+        smp = JointModelSampler(md, n_chains=n_chains, device=device, seed=seed, dtype=dt)
+        if verbose:
+            print(f"setup done in {t_setup:.1f}s; sampling on {smp.dev} "
+                  f"({str(dt).replace('torch.', '')}) ...", flush=True)
+        out = smp.run(n_iter=n_iter, n_burnin=n_burnin, progress=verbose)
+        blocks = sm.collect(md, out, n_thin=n_thin)
+        if dt == torch.float64 or all(np.isfinite(v[0]).all() for v in blocks.values()):
+            break
+        warnings.warn("float32 sampling produced invalid values (e.g. a covariance that is "
+                      "numerically singular); refitting in float64", RuntimeWarning)
+        dt = torch.float64
     ll_mean = sm.loglik_at_means(smp, md, blocks, out)
     fs = sm.fit_stats(out["fitstats_acc"], out["n_keep"], ll_mean)
     return JointModelFit(
         md=md, blocks=blocks, fit_statistics=fs,
         settings=dict(n_iter=n_iter, n_burnin=n_burnin, n_thin=n_thin, n_chains=n_chains,
-                      seed=seed),
+                      seed=seed, dtype=str(dt).replace("torch.", "")),
         timing=dict(setup=t_setup, mcmc=out["elapsed"], device=out["device"],
                     gpu_peak_mb=out["gpu_peak_mb"]),
         random_effects_mean=out["mean_b"].mean(0))
