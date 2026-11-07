@@ -67,7 +67,8 @@ def draw(ax, impl, pts, key, scale, minutes, color, lw, lab, x_max=None, note=Tr
     if note:
         ax.annotate(("~" if est else "") + fmt(end_y, key, minutes)
                     + (" (extrapolated)" if est else ""),
-                    (end_x, end_y / scale), textcoords="offset points", xytext=(6, 0),
+                    (end_x, end_y / scale), textcoords="offset points",
+                    xytext=(6, 9 if key == "peak_ram_gb" and impl == "Python-GPU" else 0),
                     fontsize=7.5, color=INK, va="center")
     if key == "peak_ram_gb" and impl == "Python-GPU":                 # GPU memory too
         g = [p[1]["gpu_peak_gb"] for p in pts]
@@ -75,7 +76,7 @@ def draw(ax, impl, pts, key, scale, minutes, color, lw, lab, x_max=None, note=Tr
                 label=lab.replace("RAM", "GPU memory"))
         if note:
             ax.annotate(fmt(g[-1], key, minutes), (x[-1], g[-1]), textcoords="offset points",
-                        xytext=(6, 0), fontsize=7.5, color=INK, va="center")
+                        xytext=(6, 1), fontsize=7.5, color=INK, va="center")
 
 
 def main():
@@ -110,7 +111,7 @@ def main():
         for j, a in enumerate(axes[i]):
             a.set_ylim(bottom=0)
             a.margins(x=0.2 if j else 0.16)
-            a.legend(frameon=False, fontsize=7, loc="upper left" if j == 0 else ("upper right" if i == 0 else "center right"))
+            a.legend(frameon=False, fontsize=7, loc="upper left" if j == 0 else "center right")
             a.xaxis.set_major_formatter(FuncFormatter(
                 lambda v, _, j=j: f"{v / 1000:.0f}k" if j and v >= 1000 else f"{v:,.0f}"))
     axes[0, 0].set_title("More patients (3,500 iterations)", fontsize=10, color=INK, loc="left")

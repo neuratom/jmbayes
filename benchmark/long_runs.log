@@ -29,3 +29,5 @@ Python-CPU patients= 3120 iters=  3500  wall   774.7s  MCMC   445.2s  peak RAM  
 Python-CPU patients= 1560 iters=  7000  wall   723.1s  MCMC   568.2s  peak RAM  0.60 GB
 Python-CPU patients= 3120 iters=  7000  wall   605.9s  MCMC   476.5s  peak RAM  0.67 GB
 R          patients= 3120 iters= 14000  wall   698.7s  MCMC   521.2s  peak RAM  6.15 GB
+R          patients= 3120 iters= 28000  wall  2439.5s  MCMC  2055.8s  peak RAM 12.02 GB
+R          patients= 3120 iters= 60000  wall  6733.3s  MCMC  5893.4s  peak RAM 25.24 GB

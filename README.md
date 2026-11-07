@@ -8,11 +8,12 @@ also much faster and needs far less memory.
 
 * **Small, nearly flat memory use.** 1.3–1.4 GB of RAM and at most 0.2 GB of GPU memory in
   every run we measured, up to 90,000 iterations. Only the kept posterior draws grow with
-  run length. JMbayes2's memory grows quickly with run length and cohort size (6.2 GB at
-  14,000 iterations for 3,120 patients), so long runs on large cohorts exceed a 16 GB
-  machine. jmbayes runs them on a laptop or a small GPU.
+  run length. JMbayes2's memory grows with run length and cohort size: for 3,120 patients
+  it needs 12 GB at 28,000 iterations and 25 GB at 60,000, beyond a 16 GB machine.
+  jmbayes runs the same fits in 1.4 GB, on a laptop or a small GPU.
 * **Faster, and it scales better.** On a GPU the MCMC is 3.3× faster than JMbayes2 on
-  312 patients, and 5.4–9.4× faster on 1,560–3,120 patients and on longer runs. With ten
+  312 patients, and 5.4–14× faster on 1,560–3,120 patients and on longer runs (at
+  60,000 iterations for 3,120 patients: 98 minutes in JMbayes2, 7 minutes in jmbayes). With ten
   times the patients, the MCMC in jmbayes takes 1.4× longer, and in JMbayes2 3.7× longer
   (see [Benchmarks](#benchmarks)).
 * **Same results.** It was checked against JMbayes2 on the same data and models. The
@@ -105,11 +106,13 @@ The two programs agree. Hazard ratios from the same model, fitted by each progra
 | 1,560 | 28,000 | 1,046 s | 6.25 GB | 164 s | 1.31 GB | 6.4× |
 | 3,120 | 7,000  | 450 s   | 3.44 GB | 48 s  | 1.31 GB | 9.4× |
 | 3,120 | 14,000 | 521 s   | 6.15 GB | 96 s  | 1.32 GB | 5.4× |
+| 3,120 | 28,000 | 2,056 s | 12.0 GB | 196 s | 1.33 GB | 10.5× |
+| 3,120 | 60,000 | 5,893 s | 25.2 GB | 429 s | 1.39 GB | 13.7× |
 | 1,560 | 90,000 | -       | -       | 529 s | 1.36 GB | |
 | 3,120 | 90,000 | -       | -       | 643 s | 1.38 GB | |
 
-JMbayes2 runs at 28,000–90,000 iterations for 3,120 patients, and at 60,000–90,000 for
-1,560, are still in progress.
+JMbayes2 runs at 90,000 iterations, and at 60,000 for 1,560 patients, are still in
+progress.
 
 The speed comes from the GPU. On the CPU alone, jmbayes is about as fast as JMbayes2 on
 small cohorts and slower on large ones, with less than half the memory (the CPU runs are
