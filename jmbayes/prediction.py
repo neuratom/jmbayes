@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from jmbayes import families as fam
 from jmbayes.model import (GK_SK, GK_WK, TimeDesigner, _bspline_basis,
                               fill_within_subject)
 
@@ -134,11 +135,36 @@ class _NewData:
         self.m = max(len(g) for g in grids)
         G = np.stack([np.pad(g, (0, self.m - len(g)), mode="edge") for g in grids])
         self.grid, self.grid_len = G, [len(g) for g in grids]
-        P = G / 2.0
-        nodes = P[..., None] * (GK_SK + 1.0)                     # (n, m, 15)
+        if sv.get("start"):
+            # delayed entry: integrate from each patient's entry time, so that sampling
+            # the random effects conditions on being event-free from entry to t
+            s0 = last[sv["start"]].astype(float).to_numpy()[:, None]
+            if (s0[:, 0] >= self.t_last).any():
+                raise ValueError(f"newdata: '{sv['start']}' must be before '{sv['time']}'")
+            P = (G - s0) / 2.0
+            nodes = P[..., None] * GK_SK + ((G + s0) / 2.0)[..., None]
+        else:
+            P = G / 2.0
+            nodes = P[..., None] * (GK_SK + 1.0)                 # (n, m, 15)
         self.log_Pwk = np.log(P)[..., None] + np.log(GK_WK)
-        self.W0 = _bspline_basis(nodes.ravel(), md.knots,
-                                 meta["Bsplines_degree"]).reshape(self.n, self.m, 15, -1)
+        deg = meta["Bsplines_degree"]
+        if md.strata_levels is not None and md.causes is None:
+            # strata: each patient's spline block, with that stratum's knots
+            lev = [str(v) for v in md.strata_levels]
+            vals = last[sv["strata"]].astype(str)
+            bad = sorted(set(vals) - set(lev))
+            if bad:
+                raise ValueError(f"newdata: unknown '{sv['strata']}' values {bad} "
+                                 f"(the model has {lev})")
+            k_of = np.array([lev.index(v) for v in vals])
+            nb0 = len(md.knots_strata[0]) - deg - 1
+            self.W0 = np.zeros((self.n, self.m, 15, nb0 * len(lev)))
+            for i, k in enumerate(k_of):
+                self.W0[i, ..., k * nb0:(k + 1) * nb0] = _bspline_basis(
+                    nodes[i].ravel(), md.knots_strata[k], deg).reshape(self.m, 15, -1)
+        else:
+            self.W0 = _bspline_basis(nodes.ravel(), md.knots, deg).reshape(self.n, self.m,
+                                                                            15, -1)
         W_raw = sv["covariates"].without_intercept().build(last, dict(meta["surv_levels"]))[0]
         designer = TimeDesigner(fill_within_subject(d), time_var)
         self.designer = designer
@@ -172,7 +198,6 @@ class _NewData:
         nodes_s = (s7 / 2.0)[..., None] * (GK_SK + 1.0)                 # (n, m, 7, 15)
         with np.errstate(divide="ignore"):
             self.log_Pwk_s = np.log(s7 / 2.0)[..., None] + np.log(GK_WK)
-        deg = meta["Bsplines_degree"]
         self.sets = {}
         for key, pts in (("H", nodes), ("h7", s7), ("H7", nodes_s)):
             Tn = pts.reshape(self.n, -1)
@@ -200,12 +225,13 @@ class _Engine:
         self.S = draws["betas"].shape[0]
         self.th = {k: t(v) for k, v in draws.items()}
         self.long = [dict(y=t(L["y"]), X=t(L["X"]), Z=t(L["Z"]),
-                          sid=torch.as_tensor(np.asarray(L["sid"]), device=self.dev))
+                          sid=torch.as_tensor(np.array(L["sid"]), device=self.dev))
                      for L in nd.long]
         self.re = [torch.as_tensor(o.re_cols, device=self.dev) for o in md.outcomes]
         self.fe = [torch.as_tensor(o.fe_cols, device=self.dev) for o in md.outcomes]
         self.Wbar, self.Wisd = t(md.Wlong_bar), 1.0 / t(md.Wlong_sds)
         self.families = [o.family for o in md.outcomes]
+        self.dfs = [o.df for o in md.outcomes]
         self.cr = nd.cr
         if self.cr:
             self.Kc = len(md.causes)
@@ -229,12 +255,8 @@ class _Engine:
         for j, L in enumerate(self.long):
             bj = b[:, :, self.re[j]][:, L["sid"], :]
             eta = self.th["betas"][:, self.fe[j]] @ L["X"].T + (L["Z"] * bj).sum(-1)
-            if self.families[j] == "gaussian":
-                s = self.th["sigmas"][:, j:j + 1]
-                ll = -torch.log(s) - 0.5 * LOG2PI - (L["y"] - eta) ** 2 / (2 * s * s)
-            else:
-                mu = 1.0 / (1.0 + torch.exp(-eta))
-                ll = torch.log(torch.where(L["y"] > 0, mu, 1.0 - mu))
+            ll = fam.log_dens(self.families[j], L["y"], eta, self.th["sigmas"][:, j:j + 1],
+                              self.dfs[j])
             out.index_add_(1, L["sid"], ll)
         return out
 
@@ -382,8 +404,10 @@ def predict(fit, newdata: pd.DataFrame, process: str = "event", times=None,
     md = fit.md
     sv = md.meta["surv"]
     from jmbayes import checks as ck
+    extra = [sv[k] for k in ("start", "strata") if sv.get(k)]
     ck._missing_report(newdata, [md.meta["id_var"], md.meta["time_var"], sv["time"],
-                                 sv["event"], *sv["covariates"].variables()], "newdata")
+                                 sv["event"], *extra, *sv["covariates"].variables()],
+                       "newdata")
     ck.check_visits(newdata, md.meta["id_var"], md.meta["time_var"],
                     [(o.response, [*o.fixed.variables(), *o.random.variables()], o.family)
                      for o in md.outcomes], "newdata", require_measured=False)
@@ -447,7 +471,7 @@ def _predict_long(md, nd, eng, b, times, level, type_):
         if type_ == "subject_specific":
             bj = b[:, :, eng.re[j]][:, torch.as_tensor(sid, device=eng.dev), :]
             eta = eta + (Z * bj).sum(-1)
-        mu = eta if o.family == "gaussian" else 1.0 / (1.0 + torch.exp(-eta))
+        mu = fam.mean(o.family, eta)
         pred, low, upp = _summaries(mu.cpu().numpy(), level)
         out[f"pred_{o.name}"], out[f"low_{o.name}"], out[f"upp_{o.name}"] = pred, low, upp
     return out.reset_index(drop=True)

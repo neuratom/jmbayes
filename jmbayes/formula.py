@@ -6,7 +6,9 @@ Every string is parsed once into the same Python objects that the Python interfa
     parse_rhs("year * sex + ns(age, 2)")   -> Terms
     parse_response("log(serBilir)")        -> Response
     parse_random("~ year | id")            -> (Terms, "id", uncorrelated=False)
-    parse_surv("Surv(years, status2) ~ sex") -> ("years", "status2", Terms)
+    parse_surv("Surv(years, status2) ~ sex") -> ("years", "status2", Terms, None, None)
+    parse_surv("Surv(entry, years, status2) ~ sex + strata(drug)")
+                                           -> ("years", "status2", Terms, "entry", "drug")
 """
 from __future__ import annotations
 
@@ -81,13 +83,30 @@ def parse_random(random: str) -> tuple[Terms, str, bool]:
     return parse_rhs(m.group(1)), m.group(3), m.group(2) == "||"
 
 
-def parse_surv(formula: str) -> tuple[str, str, Terms]:
-    """'Surv(years, status2) ~ sex' -> ("years", "status2", Terms without intercept)."""
-    m = re.match(r"^\s*Surv\(\s*(\w+)\s*,\s*(\w+)\s*\)\s*~\s*(.+)$", formula)
+def parse_surv(formula: str):
+    """'Surv(years, status2) ~ sex' -> (time, event, Terms without intercept, start,
+    strata); 'Surv(start, stop, event)' gives delayed entry and a 'strata(x)' term a
+    baseline hazard per stratum (start and strata are None otherwise)."""
+    m = re.match(r"^\s*Surv\(\s*(\w+)\s*,\s*(\w+)\s*(?:,\s*(\w+)\s*)?\)\s*~\s*(.+)$",
+                 formula)
     if not m:
-        raise ValueError("formula should look like 'Surv(time, event) ~ covariates', "
-                         f"got {formula!r}")
-    return m.group(1), m.group(2), parse_rhs(m.group(3)).without_intercept()
+        raise ValueError("formula should look like 'Surv(time, event) ~ covariates' or "
+                         f"'Surv(start, stop, event) ~ covariates', got {formula!r}")
+    if m.group(3):
+        start, time, event = m.group(1), m.group(2), m.group(3)
+    else:
+        start, time, event = None, m.group(1), m.group(2)
+    rhs, strata = m.group(4).replace(" ", ""), None
+    sm = re.findall(r"strata\((\w+)\)", rhs)
+    if len(sm) > 1:
+        raise NotImplementedError("only one strata() term is supported")
+    if sm:
+        strata = sm[0]
+        parts = [p for p in rhs.split("+") if p != f"strata({strata})"]
+        if any("strata(" in p for p in parts):
+            raise NotImplementedError("strata() can only be added as its own term")
+        rhs = "+".join(parts) or "1"
+    return time, event, parse_rhs(rhs).without_intercept(), start, strata
 
 
 def parse_functional_forms(text: str) -> dict:

@@ -1,12 +1,19 @@
-"""Equivalence of jmbayes and JMbayes2 for competing risks (same test as the main report).
+"""Equivalence of jmbayes and JMbayes2 for the extension models (same test as the main
+report): competing risks, and the 0.6 additions.
 
-Inputs: R_cr_seed123.json, R_cr_seed456.json (run_cr_R.R) and PY_cr_seed123.json,
-PY_cr_seed456.json (run_cr.py): PBC, death and transplantation as competing events,
-12 chains x 30,000 iterations per run. Prints the summary and writes cr_equivalence.json.
+Usage: python compare_cr.py [cr|surv|fam]   (default cr)
+Inputs: R_<model>_seed123.json, R_<model>_seed456.json (run_cr_R.R / run_ext_R.R) and
+PY_<model>_seed123.json, PY_<model>_seed456.json (run_cr.py / run_ext.py), 12 chains x
+30,000 iterations per run.
+  cr:   PBC, death and transplantation as competing events
+  surv: delayed entry and a baseline hazard per treatment arm
+  fam:  negative binomial, Poisson and Student's t markers
+Prints the summary and writes <model>_equivalence.json.
 """
 import json
 import math
 import pathlib
+import sys
 
 import numpy as np
 from scipy.stats import norm
@@ -26,9 +33,9 @@ def rows_of(run, blk):
     return [(r["Mean"], r["StDev"], r["SE"]) for r in run[blk]]
 
 
-def pair_stats(a, b):
+def pair_stats(a, b, blocks):
     z, d = [], []
-    for blk in BLOCKS:
+    for blk in blocks:
         for (ma, sa, ea), (mb, _, eb) in zip(rows_of(a, blk), rows_of(b, blk)):
             z.append((ma - mb) / math.hypot(ea, eb))
             d.append(abs(ma - mb) / sa)
@@ -41,13 +48,14 @@ def pooled(runs, blk):
              math.sqrt(sum(v[2] ** 2 for v in vals)) / len(vals)) for vals in zip(*rows)]
 
 
-def main():
-    R = [json.load(open(HERE / f"R_cr_seed{s}.json")) for s in (123, 456)]
-    P = [json.load(open(HERE / f"PY_cr_seed{s}.json")) for s in (123, 456)]
+def main(model="cr"):
+    R = [json.load(open(HERE / f"R_{model}_seed{s}.json")) for s in (123, 456)]
+    P = [json.load(open(HERE / f"PY_{model}_seed{s}.json")) for s in (123, 456)]
+    BLOCKS = [b["block"] for b in R[0]["stats"]]
     for blk in BLOCKS:                     # same parameters in both programs
         assert len(rows_of(R[0], blk)) == len(rows_of(P[0], blk)), blk
-    z_pp, d_pp = pair_stats(*P)
-    z_rr, d_rr = pair_stats(*R)
+    z_pp, d_pp = pair_stats(*P, BLOCKS)
+    z_rr, d_rr = pair_stats(*R, BLOCKS)
     k = math.sqrt(np.mean(np.square(np.concatenate([z_pp, z_rr]))))
     names = [r["name"] for blk in BLOCKS for r in P[0][blk]]
     cmp = []
@@ -81,7 +89,7 @@ def main():
         Py_vs_Py=dict(median=float(np.median(d_pp)), max=float(d_pp.max())),
         hazard_ratios=hr, parameters=cmp,
         mcmc_time=dict(R=[r["mcmc_time"] for r in R], Python=[p["mcmc_time"] for p in P]))
-    (HERE / "cr_equivalence.json").write_text(json.dumps(out, indent=1))
+    (HERE / f"{model}_equivalence.json").write_text(json.dumps(out, indent=1))
     print(f"{out['equivalent_0_2']}/{len(cmp)} equivalent at +-0.2 SD, "
           f"{out['equivalent_0_1']} at +-0.1 SD, {out['shown_to_differ']} shown to differ "
           f"(k = {k:.2f})")
@@ -99,4 +107,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1] if len(sys.argv) > 1 else "cr")

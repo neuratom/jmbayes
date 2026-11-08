@@ -1,0 +1,5 @@
+Warning message:
+In GLMMadaptive::mixed_model(fixed = prothrombin ~ year * sex, data = pbc2,  :
+  Hessian matrix at convergence is not positive definite; unstable solution.
+
+done: MCMC 3907.6s

@@ -4,8 +4,8 @@ JMbayes2 takes fitted lme(), mixed_model() and coxph() objects and uses them
 for starting values and to centre some priors. These are the same estimators:
 
 * lme (REML linear mixed model)        -> statsmodels MixedLM, reml=True
-* mixed_model, binomial (ML with adaptive Gauss-Hermite, 11 points, like
-  GLMMadaptive's default)               -> fit_glmm_binomial() below
+* mixed_model: binomial, Poisson, negative binomial, Student's t (ML with
+  adaptive Gauss-Hermite, 11 points, like GLMMadaptive's default) -> fit_glmm() below
 * coxph (Efron ties, R's default)       -> fit_coxph() below
 """
 from __future__ import annotations
@@ -14,7 +14,8 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy import optimize
-from scipy.special import expit, log_expit
+
+from jmbayes.families import has_sigma, np_loglik, np_score_weight
 
 
 @dataclass
@@ -53,7 +54,8 @@ def fit_lme(y, X, Z, groups, diagonal=False) -> MixedFit:
 
 
 # ---------------------------------------------------------------------------
-# Binomial GLMM, maximum likelihood with adaptive Gauss-Hermite quadrature
+# GLMMs (binomial, Poisson, negative binomial, Student's t): maximum likelihood with
+# adaptive Gauss-Hermite quadrature, as GLMMadaptive::mixed_model()
 # ---------------------------------------------------------------------------
 
 def _gh_grid(q: int, k: int):
@@ -65,8 +67,10 @@ def _gh_grid(q: int, k: int):
 
 
 class _GLMM:
-    def __init__(self, y, X, Z, sid, n_agq=11, diagonal=False):
+    def __init__(self, y, X, Z, sid, n_agq=11, diagonal=False, family="binomial", df=0.0):
         self.y, self.X, self.Z, self.sid = y, X, Z, sid
+        self.family, self.df = family, df
+        self.n_phi = int(has_sigma(family))                # log size / log scale
         self.n = sid.max() + 1
         self.p, self.q = X.shape[1], Z.shape[1]
         self.nodes, self.log_w = _gh_grid(self.q, n_agq)
@@ -75,46 +79,55 @@ class _GLMM:
 
     def unpack(self, theta):
         beta = theta[:self.p]
+        phi = theta[self.p] if self.n_phi else 0.0
         Lc = np.zeros((self.q, self.q))
-        Lc[self.tril] = theta[self.p:]
+        Lc[self.tril] = theta[self.p + self.n_phi:]
         Lc[np.diag_indices(self.q)] = np.exp(np.diag(Lc))
-        return beta, Lc @ Lc.T
+        return beta, phi, Lc @ Lc.T
 
-    def _modes(self, beta, Dinv):
+    def _curv(self, w):
+        H = np.zeros((self.n, self.q, self.q))
+        np.add.at(H, self.sid, w[:, None, None] * self.Z[:, :, None] * self.Z[:, None, :])
+        return H
+
+    def _modes(self, beta, phi, Dinv):
         b = self.modes.copy()
         xb = self.X @ beta
-        for _ in range(50):
+        for _ in range(100):
             eta = xb + np.einsum("ij,ij->i", self.Z, b[self.sid])
-            pr = expit(eta)
+            sc, w = np_score_weight(self.family, self.y, eta, phi, self.df)
             g = np.zeros((self.n, self.q))
-            np.add.at(g, self.sid, -self.Z * (self.y - pr)[:, None])
+            np.add.at(g, self.sid, -self.Z * sc[:, None])
             g += b @ Dinv
-            w = pr * (1 - pr)
-            H = np.zeros((self.n, self.q, self.q))
-            np.add.at(H, self.sid, w[:, None, None] * self.Z[:, :, None] * self.Z[:, None, :])
-            H += Dinv
+            H = self._curv(w) + Dinv
             step = np.linalg.solve(H, g[..., None])[..., 0]
             b = b - step
             if np.abs(step).max() < 1e-10:
                 break
-        # Hessian at the final mode
+        # curvature at the final mode
         eta = xb + np.einsum("ij,ij->i", self.Z, b[self.sid])
-        w = expit(eta) * (1 - expit(eta))
-        H = np.zeros((self.n, self.q, self.q))
-        np.add.at(H, self.sid, w[:, None, None] * self.Z[:, :, None] * self.Z[:, None, :])
-        H += Dinv
-        return b, H
+        _, w = np_score_weight(self.family, self.y, eta, phi, self.df)
+        return b, self._curv(w) + Dinv
 
     def negloglik(self, theta, update_modes=False):
-        beta, D = self.unpack(theta)
+        """Minus the log-likelihood; 1e300 at parameter values where it cannot be
+        computed (so the optimiser's line search steps back)."""
+        try:
+            with np.errstate(all="ignore"):
+                return self._negloglik(theta, update_modes)
+        except np.linalg.LinAlgError:
+            return 1e300
+
+    def _negloglik(self, theta, update_modes):
+        beta, phi, D = self.unpack(theta)
         Dinv = np.linalg.inv(D)
-        b, H = self._modes(beta, Dinv)
+        b, H = self._modes(beta, phi, Dinv)
         if update_modes:
             self.modes = b
         A = np.linalg.cholesky(np.linalg.inv(H))                 # (n, q, q)
         bk = b[:, None, :] + np.sqrt(2) * np.einsum("nij,kj->nki", A, self.nodes)
         eta = (self.X @ beta)[:, None] + np.einsum("ij,ikj->ik", self.Z, bk[self.sid])
-        ll_obs = self.y[:, None] * log_expit(eta) + (1 - self.y[:, None]) * log_expit(-eta)
+        ll_obs = np_loglik(self.family, self.y, eta, phi, self.df)
         ll = np.zeros((self.n, len(self.log_w)))
         np.add.at(ll, self.sid, ll_obs)
         quad = np.einsum("nki,ij,nkj->nk", bk, Dinv, bk)
@@ -126,17 +139,37 @@ class _GLMM:
         _, logdetD = np.linalg.slogdet(D)
         li = 0.5 * self.q * np.log(2) + logdetA + lse \
             - 0.5 * self.q * np.log(2 * np.pi) - 0.5 * logdetD
-        return -li.sum()
+        out = -li.sum()
+        return out if np.isfinite(out) else 1e300
 
 
-def fit_glmm_binomial(y, X, Z, groups, n_agq=11, diagonal=False) -> MixedFit:
+def _glm_start(family, y, X):
+    """Fixed effects and log extra parameter of the model without random effects."""
+    import statsmodels.api as sm
+    if family == "binomial":
+        return sm.GLM(y, X, family=sm.families.Binomial()).fit().params, []
+    if family in ("poisson", "negative_binomial"):
+        beta = sm.GLM(y, X, family=sm.families.Poisson()).fit().params
+        if family == "poisson":
+            return beta, []
+        mu = np.exp(X @ beta)
+        excess = max(np.mean((y - mu) ** 2 - mu), 1e-3 * np.mean(mu))
+        return beta, [np.log(np.clip(np.mean(mu) ** 2 / excess, 1e-3, 1e3))]
+    beta = np.linalg.lstsq(X, y, rcond=None)[0]                  # student_t
+    return beta, [np.log(np.std(y - X @ beta))]
+
+
+def fit_glmm(y, X, Z, groups, family="binomial", df=0.0, n_agq=11,
+             diagonal=False) -> MixedFit:
+    """GLMM by maximum likelihood (adaptive Gauss-Hermite, 11 points per random effect).
+    log_sigma is GLMMadaptive's 'phis': the log size (negative binomial) or log scale
+    (Student's t); -20 when the family has no extra parameter (R convention)."""
     uniq = list(dict.fromkeys(groups))
     index = {g: i for i, g in enumerate(uniq)}
     sid = np.array([index[g] for g in groups])
-    m = _GLMM(y.astype(float), X, Z, sid, n_agq, diagonal)
-    import statsmodels.api as sm
-    beta0 = sm.GLM(y, X, family=sm.families.Binomial()).fit().params
-    theta0 = np.concatenate([beta0, np.zeros(len(m.tril[0]))])
+    m = _GLMM(y.astype(float), X, Z, sid, n_agq, diagonal, family, df)
+    beta0, phi0 = _glm_start(family, y.astype(float), X)
+    theta0 = np.concatenate([beta0, phi0, np.zeros(len(m.tril[0]))])
     m.negloglik(theta0, update_modes=True)
     best = None
     for _ in range(5):                    # refresh warm-start modes between rounds
@@ -150,9 +183,13 @@ def fit_glmm_binomial(y, X, Z, groups, n_agq=11, diagonal=False) -> MixedFit:
     theta = best.x
     Hs = _num_hessian(m.negloglik, theta)
     vcov = np.linalg.inv(Hs)[:m.p, :m.p]
-    beta, D = m.unpack(theta)
+    beta, phi, D = m.unpack(theta)
     m.negloglik(theta, update_modes=True)
-    return MixedFit(beta, vcov, D, m.modes.copy(), -20.0)
+    return MixedFit(beta, vcov, D, m.modes.copy(), float(phi) if m.n_phi else -20.0)
+
+
+def fit_glmm_binomial(y, X, Z, groups, n_agq=11, diagonal=False) -> MixedFit:
+    return fit_glmm(y, X, Z, groups, "binomial", n_agq=n_agq, diagonal=diagonal)
 
 
 def _num_hessian(f, x, h=1e-4):
@@ -171,19 +208,23 @@ def _num_hessian(f, x, h=1e-4):
 # Cox model, Efron ties
 # ---------------------------------------------------------------------------
 
-def fit_coxph(time, event, W, strata=None) -> np.ndarray:
+def fit_coxph(time, event, W, strata=None, start=None) -> np.ndarray:
     """Cox model by Newton-Raphson with Efron ties. strata: optional stratum of each row;
-    risk sets are then formed within strata, as with coxph(... + strata())."""
+    risk sets are then formed within strata, as with coxph(... + strata()). start:
+    optional entry times (delayed entry, Surv(start, stop, event)): a patient is at risk
+    at t only when start < t <= time."""
     beta = np.zeros(W.shape[1])
     if strata is None:
         strata = np.zeros(len(time), int)
+    if start is None:
+        start = np.full(len(time), -np.inf)
     groups = [(k, np.unique(time[(event == 1) & (strata == k)])) for k in np.unique(strata)]
     for _ in range(50):
         grad = np.zeros_like(beta)
         hess = np.zeros((len(beta), len(beta)))
         r = np.exp(W @ beta)
         for k, t in ((k, t) for k, ts in groups for t in ts):
-            risk = (time >= t) & (strata == k)
+            risk = (time >= t) & (start < t) & (strata == k)
             dead = (time == t) & (event == 1) & (strata == k)
             d = dead.sum()
             s0r, s1r = r[risk].sum(), (r[risk, None] * W[risk]).sum(0)

@@ -40,8 +40,10 @@ def event_causes(col: pd.Series, censored):
 
 
 def check_patients(patients: pd.DataFrame, id_var: str, time: str, event: str,
-                   covariates, what="patients data", censored=None):
-    _missing_report(patients, [id_var, time, event, *covariates], what)
+                   covariates, what="patients data", censored=None, start=None,
+                   strata=None):
+    extra = [c for c in (start, strata) if c]
+    _missing_report(patients, [id_var, time, event, *extra, *covariates], what)
     dup = patients[id_var][patients[id_var].duplicated()]
     if len(dup):
         raise DataError(f"{what} must have one row per patient; repeated ids: "
@@ -50,6 +52,16 @@ def check_patients(patients: pd.DataFrame, id_var: str, time: str, event: str,
     if (t <= 0).any():
         raise DataError(f"{what}: follow-up time '{time}' must be positive; "
                         f"{int((t <= 0).sum())} rows are <= 0")
+    if start:
+        if not pd.api.types.is_numeric_dtype(patients[start]):
+            raise DataError(f"{what}: entry time '{start}' must be numeric")
+        t0 = patients[start].astype(float)
+        if (t0 < 0).any():
+            raise DataError(f"{what}: entry time '{start}' must be >= 0; "
+                            f"{int((t0 < 0).sum())} rows are negative")
+        if (t0 >= t).any():
+            raise DataError(f"{what}: entry time '{start}' must be before the follow-up "
+                            f"time '{time}'; {int((t0 >= t).sum())} rows are not")
     if censored is not None:
         vals = set(patients[event].astype(str))
         if str(censored) not in vals and len(vals) < 2:
@@ -76,7 +88,16 @@ def check_visits(visits: pd.DataFrame, id_var: str, time_var: str, markers,
         y = visits[resp.var].dropna()
         if y.empty and require_measured:
             raise DataError(f"{what}: marker '{resp.var}' has no measurements")
-        if family == "binomial":
+        if family in ("poisson", "negative_binomial"):
+            if not pd.api.types.is_numeric_dtype(y):
+                raise DataError(f"{what}: count marker '{resp.var}' must be numeric")
+            if (y < 0).any() or (np.round(y) != y).any():
+                raise DataError(f"{what}: {family} marker '{resp.var}' must be counts "
+                                "(whole numbers >= 0)")
+            if resp.transform is not None:
+                raise DataError(f"{what}: a {family} marker is modelled on its own scale "
+                                f"(log link); drop the {resp.transform}() transform")
+        elif family == "binomial":
             vals = set(pd.unique(y))
             if pd.api.types.is_numeric_dtype(y) and not vals <= {0, 1}:
                 raise DataError(f"{what}: binomial marker '{resp.var}' must be coded 0/1 "

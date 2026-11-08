@@ -27,6 +27,9 @@ Miranda Afonso: the same model, the same priors and the same MCMC algorithm.
 * **Competing risks and prediction accuracy.** Cause-specific hazards as in JMbayes2,
   and time-dependent AUC, ROC, Brier score and calibration that reproduce JMbayes2's
   numbers.
+* **Count and outlier-robust markers, strata and late entry.** Poisson, negative
+  binomial and Student's t markers, stratified baseline hazards and delayed entry, each
+  tested against JMbayes2.
 * **A Python interface**, plus JMbayes2-style formula strings if you prefer them.
 
 ## Install
@@ -231,12 +234,58 @@ JMbayes2 0.6-5's own `predict()` fails on this model, so the cumulative incidenc
 checked internally: summed over causes they match the overall risk. As in JMbayes2, the
 accuracy measures above are for single-event models only.
 
+## Counts, outliers, strata and late entry
+
+**Marker types.** Besides `"gaussian"` and `"binomial"`, a marker can be:
+
+```python
+jmb.Marker("seizures", fixed=year, random=year, family="poisson")            # counts
+jmb.Marker("platelets", fixed=year, random=year, family="negative_binomial") # overdispersed counts
+jmb.Marker("prothrombin", fixed=year, random=year, family="student_t", df=4) # robust to outliers
+```
+
+Counts use a log link, so `value(marker)` in the hazard is the log of the expected count.
+Student's t needs its degrees of freedom (`df`), as in JMbayes2. In
+`fit.coefficients(...)`, `sigma` is the size of a negative binomial marker (variance
+mu + mu²/size) and the scale of a Student's t marker.
+
+**Strata.** Each group gets its own baseline hazard; covariate and marker effects are
+shared (like `strata(drug)` in R):
+
+```python
+jmb.Event("years", "status2", sex, strata="drug")
+```
+
+**Late entry (left truncation).** When patients join the study some time after their
+time zero (e.g. time since diagnosis, recruited later), give the entry time; a patient
+counts as at risk only from entry on (like `Surv(entry, years, status2)` in R):
+
+```python
+jmb.Event("years", "status2", sex, start="entry")
+```
+
+As JMbayes2 does for this model, the hazard is then integrated with a 7-point rule. To
+predict for a new patient, `newdata` needs the entry (and strata) column too.
+
+**Tested against JMbayes2.** Two models, each fitted in both programs with two seeds
+(12 chains of 30,000 iterations), using the same equivalence tests as above:
+
+| Model | Parameters equivalent (±0.1 SD) | Shown to differ | MCMC time, JMbayes2 → jmbayes |
+|---|---|---|---|
+| Strata (drug) + late entry; log bilirubin and prothrombin | 47 / 47 | 0 | 29 min → 2.2 min (13×) |
+| Negative binomial platelets, Poisson bilirubin count, Student's t (df 4) prothrombin | 50 / 50 | 0 | 65 min → 2.6 min (25×) |
+
+For the second model both programs started from the same separate fits (R's), because
+GLMMadaptive's Student's t fit of prothrombin does not converge properly and jm() centres
+some priors on it. Scripts: `benchmark/run_ext.py`, `run_ext_R.R`, `compare_cr.py`.
+
 ## Your own data
 
 You need two pandas data frames, as in JMbayes2:
 
 * **visits** (one row per measurement): patient id, visit time, markers, covariates
-* **patients** (one row per patient): the same id, follow-up time, event (0/1), covariates
+* **patients** (one row per patient): the same id, follow-up time, event (0/1, or the
+  cause for competing risks), covariates, and optionally an entry time or a strata column
 
 ```python
 import pandas as pd
@@ -286,8 +335,9 @@ chains × iterations × patients (patients in the order of `fit.patient_ids`). I
 Check convergence in `fit.survival_table()`: `Rhat` should be below about 1.05. If not,
 run longer or with more chains.
 
-Not supported yet (you get a clear error): outcome families other than gaussian and
-binomial, strata other than competing risks, left truncation, interval censoring.
+Not supported yet (you get a clear error): other marker families (beta, gamma, censored
+normal, ...), interval censoring, recurrent events, survival covariates that change over
+time, and strata or late entry combined with competing risks.
 
 ## Prefer R formulas?
 
@@ -302,6 +352,8 @@ fit = jmb.jm(
     data=visits, time_var="year",
     functional_forms="~ value(log(serBilir)) + slope(log(serBilir))")
 ```
+
+Late entry and strata are written as in R: `"Surv(entry, years, status2) ~ sex + strata(drug)"`.
 
 ## How it works
 

@@ -29,6 +29,7 @@ import time as _time
 import numpy as np
 import torch
 
+from jmbayes import families as fam
 from jmbayes.model import ModelData
 
 LOG2PI = math.log(2 * math.pi)
@@ -95,7 +96,9 @@ class JointModelSampler:
         self.outs = []
         for o in md.outcomes:
             self.outs.append(dict(
-                y=t(o.y), X=t(o.X), Z=t(o.Z), sid=ti(o.sid), fam=o.family,
+                y=t(o.y), X=t(o.X), Z=t(o.Z), sid=ti(o.sid), fam=o.family, df=o.df,
+                lgy1=(torch.lgamma(t(o.y) + 1.0)
+                      if o.family in ("poisson", "negative_binomial") else None),
                 re=ti(o.re_cols), fe=ti(o.fe_cols), re_py=[int(c) for c in o.re_cols],
                 has_sigma=o.has_sigma,
                 # fixed effects outside the hierarchical centering (Metropolis-Hastings)
@@ -147,12 +150,7 @@ class JointModelSampler:
 
     def ll_long_obs(self, j, eta, sigma):
         o = self.outs[j]
-        y = o["y"]
-        if o["fam"] == "gaussian":
-            s = sigma[:, None]
-            return -torch.log(s) - 0.5 * LOG2PI - (y - eta) ** 2 / (2 * s * s)
-        mu = 1.0 / (1.0 + torch.exp(-eta))                         # binomial, logit link
-        return torch.log(torch.where(y > 0, mu, 1.0 - mu))
+        return fam.log_dens(o["fam"], o["y"], eta, sigma[:, None], o["df"], o["lgy1"])
 
     def ll_long_subj(self, j, eta, sigma):
         o = self.outs[j]

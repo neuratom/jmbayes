@@ -289,6 +289,20 @@ calibration curve), with model-based or inverse-probability-of-censoring weights
 same predicted risks, they reproduced JMbayes2's values to $10^{-10}$ or better in two
 prediction windows.
 
+\paragraph{Other markers, strata and late entry.} jmbayes 0.6 adds Poisson, negative
+binomial and Student's $t$ markers, stratified baseline hazards and delayed entry (left
+truncation), with JMbayes2's densities, priors and quadrature (a 7-point Gauss--Kronrod
+rule on $[\text{entry}, T_i]$ under delayed entry). We tested two models as above (two
+seeds, 12 chains of 30,000 iterations). In the first, the baseline hazard was stratified by
+treatment, entry was set to 20\% of follow-up, and log serum bilirubin and prothrombin
+time were Gaussian markers; all 47 parameters were shown equivalent within $\pm 0.1$ SD
+(largest difference 0.032 SD). In the second, platelets were negative binomial, rounded
+serum bilirubin Poisson and prothrombin time Student's $t$ with 4 degrees of freedom; all
+50 parameters were shown equivalent within $\pm 0.1$ SD (largest 0.024 SD). Because
+GLMMadaptive's Student's $t$ fit did not converge and \texttt{jm()} centres some priors on
+the separate fits, both programs started from R's separate fits in the second model. MCMC
+took 1,712~s and 3,907~s in JMbayes2 and 135~s and 156~s in jmbayes.
+
 \section{Speed and memory}\label{sec:bench}
 
 \paragraph{Setup.} To vary the cohort size, the PBC data were copied 1, 2, 5 and 10 times
@@ -364,17 +378,20 @@ took less time for 3,120 patients at 14,000 iterations than for 1,560, and its r
 60,000 iterations overlapped with other work (Table~\ref{tab:bench}). Larger cohorts were
 made by copying one data set, which tests scaling but not new data. Equivalence was tested
 in depth on one model and data set; three further models (splines, slope and area
-associations, fixed effects without random effects) agreed in smaller tests. The speed-up
+associations, fixed effects without random effects) agreed in smaller tests, and
+competing risks, the new marker families, strata and delayed entry were each tested on
+one model of the same data. The speed-up
 needs an NVIDIA GPU. jmbayes does not yet cover all of JMbayes2: it supports Gaussian and
-binomial markers, value, slope and area associations, right censoring and competing
-risks, but not other
-outcome families, strata other than competing risks, left truncation or interval
-censoring, and it does not compute marginal fit statistics. Unsupported models stop with an error rather
+binomial, Poisson, negative binomial and Student's $t$ markers, value, slope and area
+associations, right censoring, delayed entry, strata and competing risks, but not beta,
+gamma or censored normal markers, interval censoring, recurrent events or time-varying
+survival covariates, nor strata or delayed entry combined with competing risks, and it
+does not compute marginal fit statistics. Unsupported models stop with an error rather
 than fitting a different model.
 
 \section{Availability}
 
-jmbayes 0.5.1 is available from PyPI (\texttt{pip install jmbayes}) and at
+jmbayes 0.6.0 is available from PyPI (\texttt{pip install jmbayes}) and at
 \url{https://github.com/neuratom/jmbayes} under the GPL-3.0 licence, like JMbayes2. The
 repository contains the scripts and results for every number in this paper, including the
 full equivalence report. jmbayes is an independent reimplementation and is not affiliated

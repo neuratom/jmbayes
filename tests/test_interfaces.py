@@ -36,7 +36,7 @@ def test_python_and_string_interfaces_give_identical_fits(pbc2_data):
 def test_python_interface_errors(pbc2_data):
     import pytest
     with pytest.raises(NotImplementedError):
-        jmb.Marker("serBilir", family="poisson")
+        jmb.Marker("serBilir", family="gamma")
     with pytest.raises(NotImplementedError):
         jmb.Marker("serBilir", association="velocity")
     with pytest.raises(TypeError):

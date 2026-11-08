@@ -1,11 +1,13 @@
 """Model setup: the Python counterpart of jm() in R/jm.R and jm_fit() in R/jm_fit.R.
 
 Scope:
-  * longitudinal families: gaussian (identity link), binomial (logit link)
+  * longitudinal families: gaussian, binomial (logit), poisson (log), negative binomial
+    (log), Student's t (identity, fixed degrees of freedom)
   * functional forms: value(), slope(), area(), no transformations
-  * right-censored event times; one event, or competing risks with cause-specific
-    hazards (one stratum per cause, as crisk_setup() + strata(CR)); no recurrent
-    events or weights
+  * right-censored event times, optionally with delayed entry (left truncation,
+    Surv(start, stop, event) with one row per patient); one event, strata (a baseline
+    hazard per stratum), or competing risks with cause-specific hazards (one stratum
+    per cause, as crisk_setup() + strata(CR)); no recurrent events or weights
 Anything outside this scope raises NotImplementedError rather than silently
 fitting a different model.
 """
@@ -18,7 +20,8 @@ import pandas as pd
 from scipy.interpolate import BSpline
 
 from jmbayes import design as dz
-from jmbayes.fits import MixedFit, fit_coxph, fit_glmm_binomial, fit_lme
+from jmbayes.families import FAMILIES, has_sigma
+from jmbayes.fits import MixedFit, fit_coxph, fit_glmm, fit_lme
 
 # Gauss-Kronrod 15-point rule, same order as gaussKronrod() in help_functions.R
 GK_SK = np.array([-0.949107912342758, -0.741531185599394, -0.405845151377397,
@@ -31,6 +34,19 @@ GK_WK = np.array([0.0630920926299786, 0.140653259715526, 0.190350578064785,
                   0.0630920926299786, 0.0229353220105292, 0.10479001032225,
                   0.169004726639268, 0.204432940075299, 0.204432940075299,
                   0.169004726639268, 0.10479001032225, 0.0229353220105292])
+# gaussKronrod(7): the first 7 nodes with Gauss weights (JMbayes2's default with delayed
+# entry, i.e. Surv(start, stop, event))
+GK7_WK = np.array([0.12948496616887, 0.279705391489277, 0.381830050505119,
+                   0.417959183673469, 0.381830050505119, 0.279705391489277,
+                   0.12948496616887])
+
+
+def gauss_kronrod(k):
+    if k == 15:
+        return GK_SK, GK_WK
+    if k == 7:
+        return GK_SK[:7], GK7_WK
+    raise NotImplementedError("GK_k must be 7 or 15")
 
 
 @dataclass
@@ -58,6 +74,7 @@ class Outcome:
     levels: dict = field(default_factory=dict)   # factor levels and spline knots
     nhc: np.ndarray = field(default_factory=lambda: np.zeros(0, int))
     Xbar: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    df: float = 0.0                 # Student's t degrees of freedom (fixed)
 
 
 @dataclass
@@ -99,10 +116,15 @@ class ModelData:
     idT: np.ndarray | None = None
     strata: np.ndarray | None = None
     causes: list | None = None
+    # strata of the baseline hazard (the causes for competing risks), with each
+    # stratum's spline knots; entry times per survival row (zeros without delayed entry)
+    strata_levels: list | None = None
+    knots_strata: list | None = None
+    trunc: np.ndarray | None = None
 
     @property
     def n_strata(self) -> int:
-        return 1 if self.causes is None else len(self.causes)
+        return 1 if not self.strata_levels else len(self.strata_levels)
 
     @property
     def row_patient(self) -> np.ndarray:
@@ -259,7 +281,7 @@ def _vcov_center(vcov, Xbar):
 
 
 def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
-             surv: dict, id_var: str, time_var: str, *, GK_k: int = 15,
+             surv: dict, id_var: str, time_var: str, *, GK_k: int | None = None,
              base_hazard_segments: int = 9, Bsplines_degree: int = 2,
              diff_order: int = 2, initial_fits: dict | None = None,
              which_independent=None) -> ModelData:
@@ -270,8 +292,13 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
     starting values and the prior centres are exactly those JMbayes2 would use:
     {"gammas": [...], "outcomes": [{"betas", "vcov", "D", "b", "b_ids", "log_sigma"}, ...]}
     """
-    if GK_k != 15:
-        raise NotImplementedError("only GK_k = 15")
+    if surv.get("start") and surv.get("causes") is not None:
+        raise NotImplementedError("delayed entry together with competing risks")
+    if surv.get("strata") and surv.get("causes") is not None:
+        raise NotImplementedError("strata together with competing risks")
+    if GK_k is None:                                 # as jm(): 7 points for Surv(start, ...)
+        GK_k = 7 if surv.get("start") else 15
+    gk_sk, gk_wk = gauss_kronrod(GK_k)
     # --- longitudinal data, ordered like jm(): by id (first appearance) then time
     ids_unique = list(dict.fromkeys(dataL[id_var]))
     id_rank = {g: i for i, g in enumerate(ids_unique)}
@@ -288,6 +315,8 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
     dataS = dataS.assign(_sid=dataS["_sid"].astype("int64"))
     dataS = dataS.sort_values("_sid").reset_index(drop=True)
     time_p = dataS[surv["time"]].astype(float).to_numpy()
+    start_p = (dataS[surv["start"]].astype(float).to_numpy() if surv.get("start")
+               else np.zeros(n))
     surv_levels = {}
     W_p, w_names_p, _ = surv["covariates"].without_intercept().build(dataS, surv_levels)
     causes = surv.get("causes")
@@ -295,13 +324,23 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
         event = dataS[surv["event"]].astype(float).to_numpy()
         if not np.all(np.isin(event, [0, 1])):
             raise NotImplementedError("only right-censored data")
-        idT, strata, time, W_raw, w_names = None, None, time_p, W_p, w_names_p
-        n_strata, row_pat = 1, np.arange(n)
+        idT, time, W_raw, w_names = None, time_p, W_p, w_names_p
+        row_pat = np.arange(n)
+        strata, strata_levels = None, None
+        if surv.get("strata"):
+            col = dataS[surv["strata"]]
+            strata_levels = (list(map(str, col.cat.categories))
+                             if isinstance(col.dtype, pd.CategoricalDtype)
+                             else sorted(map(str, pd.unique(col))))
+            strata_levels = [v for v in strata_levels if v in set(col.astype(str))]
+            strata = np.array([strata_levels.index(v) for v in col.astype(str)])
+        n_strata = 1 if strata_levels is None else len(strata_levels)
     else:
         # competing risks, as crisk_setup(): one row per patient and cause, the event
         # indicator of each row is 1 for the cause that occurred; every covariate gets a
         # cause-specific effect (columns ordered covariate-major, like x:strata(CR))
         n_strata = len(causes)
+        strata_levels = list(causes)
         status = dataS[surv["event"]].astype(str).to_numpy()
         idT = np.repeat(np.arange(n), n_strata)
         strata = np.tile(np.arange(n_strata), n)
@@ -315,16 +354,18 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
                 rows = strata == k
                 W_raw[rows, j * n_strata + k] = W_p[idT[rows], j]
         w_names = [f"{nm} [{c}]" for nm in w_names_p for c in causes]
+    trunc = start_p[row_pat]
     if initial_fits is None:
-        gammas_cox = fit_coxph(time, event, W_raw, strata)
+        gammas_cox = fit_coxph(time, event, W_raw, strata,
+                               trunc if surv.get("start") else None)
     else:
         gammas_cox = np.atleast_1d(np.asarray(initial_fits["gammas"], float))
 
     # --- quadrature (per survival row)
     R = len(time)
-    P = time / 2.0
-    st = P[:, None] * GK_SK[None, :] + P[:, None]                # (R, 15)
-    log_Pwk = (np.log(P)[:, None] + np.log(GK_WK)[None, :]).ravel()
+    P = (time - trunc) / 2.0                                     # [entry, time]
+    st = P[:, None] * gk_sk[None, :] + ((time + trunc) / 2.0)[:, None]      # (R, GK_k)
+    log_Pwk = (np.log(P)[:, None] + np.log(gk_wk)[None, :]).ravel()
     st_flat = st.ravel()
     sid_H = np.repeat(row_pat, GK_k)                             # quadrature point -> patient
     rid_H = np.repeat(np.arange(R), GK_k)                        # quadrature point -> row
@@ -333,19 +374,23 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
         knots = _knots(time, base_hazard_segments, Bsplines_degree)
         W0_H = _bspline_basis(st_flat, knots, Bsplines_degree)
         W0_h = _bspline_basis(time, knots, Bsplines_degree)
+        knots_strata = [knots]
     else:
         # create_W0(): one block of spline columns per stratum, knots from each stratum's
-        # times (identical here, since every patient has a row in every stratum)
-        knots = _knots(time[strata == 0], base_hazard_segments, Bsplines_degree)
-        bH = _bspline_basis(st_flat, knots, Bsplines_degree)
-        bh = _bspline_basis(time, knots, Bsplines_degree)
-        nb0 = bH.shape[1]
+        # times (for competing risks identical, every patient has a row per cause)
+        knots_strata = [_knots(time[strata == k], base_hazard_segments, Bsplines_degree)
+                        for k in range(n_strata)]
+        knots = knots_strata[0]
+        nb0 = len(knots) - Bsplines_degree - 1
         W0_H = np.zeros((len(st_flat), nb0 * n_strata))
         W0_h = np.zeros((R, nb0 * n_strata))
         strata_H = strata[rid_H]
         for k in range(n_strata):
-            W0_H[strata_H == k, k * nb0:(k + 1) * nb0] = bH[strata_H == k]
-            W0_h[strata == k, k * nb0:(k + 1) * nb0] = bh[strata == k]
+            rH, rh = strata_H == k, strata == k
+            W0_H[rH, k * nb0:(k + 1) * nb0] = _bspline_basis(st_flat[rH], knots_strata[k],
+                                                             Bsplines_degree)
+            W0_h[rh, k * nb0:(k + 1) * nb0] = _bspline_basis(time[rh], knots_strata[k],
+                                                             Bsplines_degree)
 
     W_H = W_raw[rid_H]
     W_h = W_raw.copy()
@@ -356,7 +401,8 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
 
     # --- designs at quadrature points (H) and event times (h)
     designer = TimeDesigner(dataL_filled, time_var)
-    st_p = (time_p / 2.0)[:, None] * GK_SK[None, :] + (time_p / 2.0)[:, None]
+    st_p = (((time_p - start_p) / 2.0)[:, None] * gk_sk[None, :]
+            + ((time_p + start_p) / 2.0)[:, None])
     time_sets = {"H": st_p, "h": time_p[:, None]}
 
     def form_design(form, terms, levels_, where, center=None):
@@ -387,6 +433,9 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
         Z, z_names, z_info = random.build(d, levels)
         sid = d["_sid"].to_numpy()
         fam = m.get("family", "gaussian")
+        if fam not in FAMILIES:
+            raise NotImplementedError(f"family {fam}")
+        df_t = float(m.get("df") or 0.0)
         if initial_fits is not None:
             f = initial_fits["outcomes"][len(fits)]
             row = {str(g): i for i, g in enumerate(f["b_ids"])}
@@ -398,10 +447,8 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
                            float(f["log_sigma"]))
         elif fam == "gaussian":
             fit = fit_lme(y, X, Z, sid, diagonal=m.get("uncorrelated", False))
-        elif fam == "binomial":
-            fit = fit_glmm_binomial(y, X, Z, sid, diagonal=m.get("uncorrelated", False))
         else:
-            raise NotImplementedError(f"family {fam}")
+            fit = fit_glmm(y, X, Z, sid, fam, df_t, diagonal=m.get("uncorrelated", False))
 
         mat, X_HC, x_in_z_base, x_notin_z = _create_hc(X, x_info, z_info, sid, d, fixed,
                                                      levels)
@@ -428,8 +475,9 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
         outcomes.append(Outcome(lhs, fam, y, X, Z, sid, x_names, z_names, assoc,
                                 np.arange(re_off, re_off + qj),
                                 np.arange(fe_off, fe_off + pj),
-                                fam == "gaussian", response=resp, fixed=fixed, random=random,
-                                levels=levels, nhc=np.asarray(x_notin_z, int), Xbar=Xbar))
+                                has_sigma(fam), response=resp, fixed=fixed, random=random,
+                                levels=levels, nhc=np.asarray(x_notin_z, int), Xbar=Xbar,
+                                df=df_t))
         hc_parts.append((mat, X_HC, x_in_z_base, sid))
         fits.append(fit)
         beta_names += [f"{lhs}: {xn}" for xn in x_names]
@@ -555,4 +603,5 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
                      beta_names=beta_names, sid_names=ids_unique,
                      meta=dict(id_var=id_var, time_var=time_var, surv=dict(surv),
                                surv_levels=surv_levels, Bsplines_degree=Bsplines_degree),
-                     idT=idT, strata=strata, causes=None if causes is None else list(causes))
+                     idT=idT, strata=strata, causes=None if causes is None else list(causes),
+                     strata_levels=strata_levels, knots_strata=knots_strata, trunc=trunc)

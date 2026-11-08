@@ -37,10 +37,23 @@ from jmbayes import checks as ck
 from jmbayes import formula as fm
 from jmbayes import summary as sm
 from jmbayes.design import Response, Terms, as_terms
+from jmbayes.families import FAMILIES
 from jmbayes.model import ModelData, jm_setup
 from jmbayes.sampler import JointModelSampler
 
-_FAMILIES = {"gaussian", "binomial"}
+_FAMILIES = set(FAMILIES)
+_ALIASES = {"negative binomial": "negative_binomial", "negative.binomial": "negative_binomial",
+            "student's-t": "student_t", "student's t": "student_t", "students_t": "student_t",
+            "student t": "student_t", "student-t": "student_t", "t": "student_t"}
+
+
+def _family(name: str) -> str:
+    f = str(name).strip().lower()
+    f = _ALIASES.get(f, f)
+    if f not in _FAMILIES:
+        raise NotImplementedError(
+            f"family '{name}' is not supported yet (supported: {sorted(_FAMILIES)})")
+    return f
 _FORMS = ("value", "slope", "area")
 _DTYPES = {"float64": torch.float64, "float32": torch.float32}
 
@@ -55,7 +68,10 @@ class Marker:
     fixed:     fixed effects, e.g. year * sex, or ["year", "sex"]; intercept included
     random:    random effects per patient besides the intercept, e.g. year (random
                intercept and slope); None = random intercept only
-    family:    "gaussian" (linear mixed model) or "binomial" (logistic mixed model)
+    family:    "gaussian" (linear mixed model), "binomial" (logistic), "poisson" (counts,
+               log link), "negative_binomial" (overdispersed counts, log link) or
+               "student_t" (continuous with heavy tails, robust to outliers)
+    df:        degrees of freedom of "student_t" (required, as in JMbayes2; e.g. 4)
     association: how the marker enters the hazard, any of "value" (current value),
                "slope" (current rate of change), "area" (average from 0 to t)
     uncorrelated: True for independent random effects (R's "||")
@@ -67,11 +83,16 @@ class Marker:
     association: list | tuple | str = ("value",)
     uncorrelated: bool = False
     transform: str | None = None
+    df: float | None = None
 
     def __post_init__(self):
-        if self.family not in _FAMILIES:
-            raise NotImplementedError(
-                f"family '{self.family}' is not supported yet (supported: {sorted(_FAMILIES)})")
+        self.family = _family(self.family)
+        if self.family == "student_t":
+            if self.df is None or not float(self.df) > 0:
+                raise ValueError("family 'student_t' needs its degrees of freedom, e.g. "
+                                 "df=4 (JMbayes2 also asks for them: students.t(df = 4))")
+        elif self.df is not None:
+            raise ValueError("df= is only used with family 'student_t'")
         if isinstance(self.response, Terms):
             raise TypeError("response: give a column name, or var(name).log()")
         if not isinstance(self.response, Response):
@@ -104,16 +125,26 @@ class Event:
                 Every other value is a cause, with its own baseline hazard, its own
                 covariate effects and its own marker associations (cause-specific
                 hazards, as with crisk_setup() and strata(CR) in JMbayes2).
+    start:      delayed entry (left truncation): column with the time each patient
+                entered the study, on the same scale as `time`; a patient counts as at
+                risk only from then on (Surv(start, time, event) in R)
+    strata:     column whose groups (e.g. hospital) each get their own baseline hazard,
+                with the covariate and marker effects shared (strata() in R)
     """
     time: str
     event: str
     covariates: object = None
     censored: object = None
+    start: str | None = None
+    strata: str | None = None
 
     def __post_init__(self):
         self.covariates = as_terms(self.covariates).without_intercept()
         if not self.covariates.terms:
             raise NotImplementedError("a survival model without covariates is not supported yet")
+        if self.censored is not None and (self.start or self.strata):
+            raise NotImplementedError("competing risks together with start= or strata= are "
+                                      "not supported yet")
 
 
 @dataclass
@@ -181,39 +212,45 @@ class Longitudinal:
     formula: fixed effects, e.g. "log(serBilir) ~ year * sex"
     random:  random effects and grouping variable, e.g. "~ year | id" or "~ 1 | id";
              "||" for uncorrelated random effects, e.g. "~ year || id"
-    family:  "gaussian" or "binomial"
+    family:  "gaussian", "binomial", "poisson", "negative_binomial" or "student_t"
+    df:      degrees of freedom for "student_t"
     """
     formula: str
     random: str
     family: str = "gaussian"
+    df: float | None = None
 
     def __post_init__(self):
         self.response, self.fixed = fm.parse_formula(self.formula)
         self.random_terms, self.id_var, self.uncorrelated = fm.parse_random(self.random)
-        Marker(self.response, family=self.family)          # validates the family early
+        self.family = Marker(self.response, family=self.family, df=self.df).family
 
     def to_marker(self, association=("value",)) -> Marker:
         return Marker(self.response, fixed=self.fixed, random=self.random_terms,
                       family=self.family, association=association,
-                      uncorrelated=self.uncorrelated)
+                      uncorrelated=self.uncorrelated, df=self.df)
 
 
 @dataclass
 class Survival:
     """The event-time sub-model written as an R formula, like coxph().
 
-    formula: e.g. "Surv(years, status2) ~ sex + age"; the event column must be 0/1
+    formula: e.g. "Surv(years, status2) ~ sex + age"; the event column must be 0/1.
+             "Surv(entry, years, status2) ~ ..." for delayed entry, "+ strata(x)" for a
+             baseline hazard per group of x
     data:    one row per patient
     """
     formula: str
     data: pd.DataFrame
 
     def __post_init__(self):
-        self.time, self.event, self.covariates = fm.parse_surv(self.formula)
+        (self.time, self.event, self.covariates, self.start,
+         self.strata) = fm.parse_surv(self.formula)
         _check_event(self.data, self.event)
 
     def to_event(self) -> Event:
-        return Event(self.time, self.event, self.covariates)
+        return Event(self.time, self.event, self.covariates, start=self.start,
+                     strata=self.strata)
 
 
 def _check_event(df, col):
@@ -336,7 +373,7 @@ class JointModelFit:
         for j, o in enumerate(md.outcomes):
             tab = self.coefficients(j + 1)
             out[o.name] = tab
-            link = "identity" if o.family == "gaussian" else "logit"
+            link = FAMILIES[o.family]["link"]
             print(f"\nLongitudinal outcome: {o.name} (family = {o.family}, link = {link})")
             print(fmt(tab))
         print(f"\nMCMC: {s['n_chains']} chains, {s['n_iter']} iterations, burn-in "
@@ -434,8 +471,13 @@ def load(path: str) -> JointModelFit:
 
 
 def _upgrade(md: ModelData) -> None:
-    """Fits saved by version 0.3 stored formulas as strings; convert them to terms."""
+    """Fits saved by version 0.3 stored formulas as strings; convert them to terms.
+    Fits saved before 0.6 have no strata fields; competing-risk strata were the causes."""
     from jmbayes.design import SplineBasis
+    if "strata_levels" not in md.__dict__:
+        md.strata_levels = None if md.__dict__.get("causes") is None else list(md.causes)
+        md.knots_strata = None if md.strata_levels is None else [md.knots] * len(md.causes)
+        md.trunc = None
     for o in md.outcomes:
         if getattr(o, "fixed", None) is not None:
             continue
@@ -523,7 +565,8 @@ def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_cha
         raise ValueError(f"dtype must be 'float64' or 'float32', got {dtype!r} (16-bit "
                          "formats are too coarse for MCMC acceptance decisions)")
     ck.check_patients(patients, model.id, model.event.time, model.event.event,
-                      model.event.covariates.variables(), censored=model.event.censored)
+                      model.event.covariates.variables(), censored=model.event.censored,
+                      start=model.event.start, strata=model.event.strata)
     causes = ck.event_causes(patients[model.event.event], model.event.censored)
     ck.check_visits(visits, model.id, model.time, _marker_specs(model))
     ck.check_same_patients(visits, patients, model.id)
@@ -536,12 +579,14 @@ def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_cha
     md = jm_setup(
         visits, patients,
         long_models=[dict(response=m.response, fixed=m.fixed, random=m.random,
-                          family=m.family, forms=m.association, uncorrelated=m.uncorrelated)
+                          family=m.family, forms=m.association, uncorrelated=m.uncorrelated,
+                          df=m.df)
                      for m in model.markers],
         which_independent=model.independent,
         surv=dict(time=model.event.time, event=model.event.event,
                   covariates=model.event.covariates, causes=causes,
-                  censored=model.event.censored),
+                  censored=model.event.censored, start=model.event.start,
+                  strata=model.event.strata),
         id_var=model.id, time_var=model.time, base_hazard_segments=base_hazard_segments,
         Bsplines_degree=Bsplines_degree, initial_fits=initial_fits)
     t_setup = time.perf_counter() - t0
