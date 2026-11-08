@@ -1,29 +1,33 @@
 \begin{longtable}{lrrrr}
-\caption{Equivalence of jmbayes and JMbayes2 for every model in this paper, judged the same way: two seeds per program (12 chains of 30,000 iterations for the first four models, 8 of 15,000 for the rest). Equivalent: shown equivalent within $\pm 0.1$ / $\pm 0.2$ posterior SD. Differ: shown to differ by more than 0.2 SD. Largest: largest absolute difference, in posterior SDs.}\label{tab:ext}\\
-\toprule Model & Parameters & Equivalent & Differ & Largest \\ \midrule \endfirsthead
-\toprule Model & Parameters & Equivalent & Differ & Largest \\ \midrule \endhead
+\caption{jmbayes against JMbayes2 for every model in this paper, judged the same way: two runs per program with different seeds (12 chains of 30,000 iterations for the first four models, 8 of 15,000 for the rest). Shown to differ: parameters whose difference is shown to exceed 0.2 posterior SD (two one-sided tests at 5\%). Difference: between a JMbayes2 run and a jmbayes run, per parameter, in units of its posterior SD (median and largest over the parameters). Equivalence counts per model are in Table~\ref{tab:extdetail}.}\label{tab:ext}\\
+\toprule & & Shown to & \multicolumn{2}{c}{Difference (posterior SDs)} \\
+\cmidrule(lr){4-5}
+Model & Parameters & differ & Median & Largest \\ \midrule \endfirsthead
+\toprule & & Shown to & \multicolumn{2}{c}{Difference (posterior SDs)} \\
+\cmidrule(lr){4-5}
+Model & Parameters & differ & Median & Largest \\ \midrule \endhead
 \bottomrule \endlastfoot
-Main model (PBC, 3 markers) & 50 & 43 / 50 & 0 & 0.042 \\
-Competing risks (PBC) & 50 & 27 / 36 & 0 & 0.065 \\
-Strata + late entry & 47 & 47 / 47 & 0 & 0.032 \\
-NB, Poisson, Student's $t$ & 50 & 50 / 50 & 0 & 0.034 \\
-Time-varying covariate & 23 & 23 / 23 & 0 & 0.026 \\
-Interval censoring & 22 & 17 / 22 & 0 & 0.077 \\
-Competing risks + entry + strata & 60 & 12 / 21 & 0 & 0.231 \\
-Effects per stratum & 50 & 26 / 34 & 0 & 0.056 \\
-Recurrent events & 38 & 12 / 23 & 0 & 0.154 \\
-Gamma, beta, cens.\ normal & 50 & 46 / 50 & 0 & 0.038 \\
-Binomial (trials), beta-binomial & 25 & 6 / 7 & 0 & 0.244 \\
-Velocity, area & 27 & 9 / 25 & 0 & 0.115 \\
-expit, Dexp, acceleration & 27 & 20 / 25 & 0 & 0.120 \\
-Value by sex, Delta & 27 & 22 / 27 & 0 & 0.071 \\
-Time-varying association & 26 & 25 / 26 & 0 & 0.045 \\
-Weibull baseline & 12 & 10 / 12 & 0 & 0.025 \\
-Piecewise-constant baseline & 20 & 20 / 20 & 0 & 0.031 \\
-Natural-spline baseline & 21 & 21 / 21 & 0 & 0.023 \\
-Multi-state & 18 & 12 / 12 & 0 & 0.115 \\
-Case weights & 22 & 22 / 22 & 0 & 0.057 \\
-Shrinkage priors & 39 & 26 / 37 & 0 & 0.045 \\
-AIDS data & 22 & 18 / 22 & 0 & 0.064 \\
-Prothrombin data & 22 & 19 / 22 & 0 & 0.041 \\
+Main model (PBC, 3 markers) & 50 & 0 & 0.020 & 0.096 \\
+Competing risks (PBC) & 50 & 0 & 0.021 & 0.068 \\
+Strata + late entry & 47 & 0 & 0.015 & 0.033 \\
+NB, Poisson, Student's $t$ & 50 & 0 & 0.012 & 0.037 \\
+Time-varying covariate & 23 & 0 & 0.021 & 0.037 \\
+Interval censoring & 22 & 0 & 0.024 & 0.080 \\
+Competing risks + entry + strata & 60 & 0 & 0.111 & 0.231 \\
+Effects per stratum & 50 & 0 & 0.044 & 0.180 \\
+Recurrent events & 38 & 0 & 0.103 & 0.154 \\
+Gamma, beta, cens.\ normal & 50 & 0 & 0.019 & 0.063 \\
+Binomial (trials), beta-binomial & 25 & 0 & 0.130 & 0.500 \\
+Velocity, area & 27 & 0 & 0.045 & 0.115 \\
+expit, Dexp, acceleration & 27 & 0 & 0.055 & 0.120 \\
+Value by sex, Delta & 27 & 0 & 0.034 & 0.071 \\
+Time-varying association & 26 & 0 & 0.022 & 0.089 \\
+Weibull baseline & 12 & 0 & 0.010 & 0.122 \\
+Piecewise-constant baseline & 20 & 0 & 0.014 & 0.041 \\
+Natural-spline baseline & 21 & 0 & 0.011 & 0.038 \\
+Multi-state & 18 & 0 & 0.028 & 0.140 \\
+Case weights & 22 & 0 & 0.014 & 0.057 \\
+Shrinkage priors & 39 & 0 & 0.019 & 0.103 \\
+AIDS data & 22 & 0 & 0.027 & 0.068 \\
+Prothrombin data & 22 & 0 & 0.021 & 0.079 \\
 \end{longtable}

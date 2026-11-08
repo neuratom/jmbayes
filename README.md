@@ -36,7 +36,8 @@ Miranda Afonso: the same model, the same priors and the same MCMC algorithm.
 
 ## Install
 
-jmbayes runs on any CPU, and on NVIDIA GPUs through PyTorch. Install PyTorch first, in
+jmbayes runs on any CPU, and on GPUs that PyTorch drives through CUDA: NVIDIA (tested)
+or AMD with ROCm (untested). Apple and Intel GPUs are not supported yet. Install PyTorch first, in
 the version that fits your machine, then this package.
 
 **With pip**
@@ -136,7 +137,9 @@ against 70–73 ms at 28,000 and 90,000 iterations), so no speed-up is given for
 
 The speed comes from the GPU. On the CPU alone, jmbayes is about as fast as JMbayes2 on
 small cohorts and slower on large ones, with less than half the memory (the CPU runs are
-in the report).
+in the report). That is because one process runs all chains as one batch; running groups of
+chains in separate processes, as JMbayes2 does, with patients batched in each, should make
+the CPU version faster as well. It is planned.
 
 jmbayes computes in float32 by default; `fit(..., dtype="float64")` gives 64-bit precision.
 The results are statistically the same: both are equivalent to JMbayes2 in the same tests

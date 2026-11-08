@@ -191,6 +191,9 @@ fitting a different model.
 
 ## Next steps
 
+* Faster CPU version: run groups of chains in separate processes (MIMD, as JMbayes2),
+  each batching its patients and chains as tensors (SIMD, as now). Today one process
+  batches everything, which on a CPU is only about as fast as JMbayes2.
 * Predictions for recurrent-event and multi-state models.
 * Survival covariates that are functions of the time variable (JMbayes2 evaluates them
   at the quadrature points); for now use an interaction in the functional forms.

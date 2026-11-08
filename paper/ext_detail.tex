@@ -1,0 +1,35 @@
+\begingroup\small\setlength{\tabcolsep}{4pt}
+\begin{longtable}{lrrrrrrr}
+\caption{Equivalence tests per model (the runs of Table~\ref{tab:ext}). Each parameter is either shown equivalent (within $\pm 0.2$ posterior SD; the $\pm 0.1$ count is a subset), shown to differ (by more than 0.2 SD), or inconclusive: two runs per program are too few to separate a difference below 0.2 SD from Monte Carlo error, which happens where the chains mix slowly. No parameter was shown to differ. Largest difference: between the programs (R vs Python, seeds averaged) and between the two JMbayes2 runs of the same model (R vs R).}\label{tab:extdetail}\\
+\toprule & & \multicolumn{2}{c}{Equivalent} & Incon- & & \multicolumn{2}{c}{Largest diff.} \\
+\cmidrule(lr){3-4}\cmidrule(lr){7-8}
+Model & Param. & $\pm 0.1$ & $\pm 0.2$ & clusive & Differ & R--Py & R--R \\ \midrule \endfirsthead
+\toprule & & \multicolumn{2}{c}{Equivalent} & Incon- & & \multicolumn{2}{c}{Largest diff.} \\
+\cmidrule(lr){3-4}\cmidrule(lr){7-8}
+Model & Param. & $\pm 0.1$ & $\pm 0.2$ & clusive & Differ & R--Py & R--R \\ \midrule \endhead
+\bottomrule \endlastfoot
+Main model (PBC, 3 markers) & 50 & 43 & 50 & 0 & 0 & 0.042 & 0.141 \\
+Competing risks (PBC) & 50 & 27 & 36 & 14 & 0 & 0.065 & 0.181 \\
+Strata + late entry & 47 & 47 & 47 & 0 & 0 & 0.032 & 0.086 \\
+NB, Poisson, Student's $t$ & 50 & 50 & 50 & 0 & 0 & 0.034 & 0.062 \\
+Time-varying covariate & 23 & 23 & 23 & 0 & 0 & 0.026 & 0.051 \\
+Interval censoring & 22 & 17 & 22 & 0 & 0 & 0.077 & 0.113 \\
+Competing risks + entry + strata & 60 & 12 & 21 & 39 & 0 & 0.231 & 0.269 \\
+Effects per stratum & 50 & 26 & 34 & 16 & 0 & 0.056 & 0.121 \\
+Recurrent events & 38 & 12 & 23 & 15 & 0 & 0.154 & 0.107 \\
+Gamma, beta, cens.\ normal & 50 & 46 & 50 & 0 & 0 & 0.038 & 0.108 \\
+Binomial (trials), beta-binomial & 25 & 6 & 7 & 18 & 0 & 0.244 & 0.139 \\
+Velocity, area & 27 & 9 & 25 & 2 & 0 & 0.115 & 0.219 \\
+expit, Dexp, acceleration & 27 & 20 & 25 & 2 & 0 & 0.120 & 0.060 \\
+Value by sex, Delta & 27 & 22 & 27 & 0 & 0 & 0.071 & 0.041 \\
+Time-varying association & 26 & 25 & 26 & 0 & 0 & 0.045 & 0.087 \\
+Weibull baseline & 12 & 10 & 12 & 0 & 0 & 0.025 & 0.114 \\
+Piecewise-constant baseline & 20 & 20 & 20 & 0 & 0 & 0.031 & 0.046 \\
+Natural-spline baseline & 21 & 21 & 21 & 0 & 0 & 0.023 & 0.056 \\
+Multi-state & 18 & 12 & 12 & 6 & 0 & 0.115 & 0.316 \\
+Case weights & 22 & 22 & 22 & 0 & 0 & 0.057 & 0.039 \\
+Shrinkage priors & 39 & 26 & 37 & 2 & 0 & 0.045 & 0.273 \\
+AIDS data & 22 & 18 & 22 & 0 & 0 & 0.064 & 0.032 \\
+Prothrombin data & 22 & 19 & 22 & 0 & 0 & 0.041 & 0.129 \\
+\end{longtable}
+\endgroup

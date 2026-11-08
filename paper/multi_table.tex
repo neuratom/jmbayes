@@ -1,0 +1,15 @@
+\begin{table}[t]
+\centering
+\small
+\caption{Run-distribution comparison: each program run 2 times per data set with different seeds (8 chains of 15,000 iterations). Per parameter, the posterior means and SDs of the jmbayes runs are compared with those of the JMbayes2 runs. Differ: number of parameters with $p < 0.05$ in Welch's $t$-test (posterior mean, SD) or the two-sample Kolmogorov--Smirnov test (run distribution of the posterior mean); in brackets, after Benjamini--Hochberg correction at 5\% FDR. About 5\% of parameters are expected below 0.05 by chance when the programs are identical. Equivalent: shown equivalent by two one-sided tests, within $\pm 0.1$ posterior SD (mean) or $\pm 10\%$ (SD).}\label{tab:multi}
+\vspace{4pt}
+\begin{tabular}{lrrrrrrr}
+\toprule & Runs & & \multicolumn{2}{c}{Posterior mean} & \multicolumn{2}{c}{Posterior SD} & Run distribution \\
+\cmidrule(lr){4-5}\cmidrule(lr){6-7}\cmidrule(lr){8-8}
+Data set & R / Py & Parameters & Differ & Equivalent & Differ & Equivalent & Differ \\ \midrule
+PBC (312 patients, 3 markers) & 2 / 2 & 50 & 1 (0) & 18 & 0 (0) & 20 & 0 (0) \\
+AIDS (467 patients) & 2 / 2 & 22 & 3 (0) & 14 & 1 (0) & 22 & 0 (0) \\
+Liver cirrhosis (488 patients) & 2 / 2 & 22 & 2 (1) & 17 & 0 (0) & 18 & 0 (0) \\
+\bottomrule
+\end{tabular}
+\end{table}

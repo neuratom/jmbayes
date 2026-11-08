@@ -353,8 +353,9 @@ death in 488 patients with liver cirrhosis (\texttt{prothro}).
 
 Table~\ref{tab:ext} gives the results, together with the main model and the competing-risks
 model above, so that every model in this paper is judged the same way. No parameter in any
-of the 21 further models was shown to differ between the programs. In 16 models all or nearly all parameters were shown
-equivalent within $\pm 0.2$ SD; in the other five (competing risks with delayed entry and
+of the 21 further models was shown to differ between the programs. Per parameter, the equivalence tests
+(Table~\ref{tab:extdetail} in the appendix) showed all or nearly all parameters equivalent
+within $\pm 0.2$ SD in 16 models; in the other five (competing risks with delayed entry and
 strata, recurrent events, effects per stratum, the beta-binomial model and the multi-state
 model) many were inconclusive, but two runs of the same program differed about
 as much as the two programs did, which points to slow mixing at this run length rather
@@ -487,7 +488,13 @@ associations, fixed effects without random effects) agreed in smaller tests, and
 each later feature (marker families, strata, delayed entry, competing risks, interval
 censoring, recurrent events, functional forms, baseline hazards, multi-state models, case
 weights and shrinkage priors) was tested on one or two models, mostly of the same data.
-The speed-up needs an NVIDIA GPU. jmbayes covers JMbayes2's model options, with three
+The speed-up needs a GPU that PyTorch drives through its CUDA interface: NVIDIA
+(tested here) or AMD with ROCm (not tested). Apple and Intel GPUs are not supported
+yet; there jmbayes runs on the CPU. On a CPU it is about as fast as JMbayes2, because it
+runs all chains in one process, which uses only the data parallelism. Combining both
+levels of Section~ef{sec:design}, with groups of chains in separate processes (MIMD, as
+JMbayes2) and patients batched within each (SIMD), should make the CPU version faster too;
+we leave this to future work. jmbayes covers JMbayes2's model options, with three
 exceptions: survival covariates that are functions of the time variable (an interaction
 in the association gives the same time-varying effects), interval censoring or recurrent
 events combined with delayed entry or competing risks, and dynamic predictions for
@@ -577,6 +584,10 @@ A.~Gelman and D.~B. Rubin.
 \end{thebibliography}
 
 \appendix
+\section{Equivalence tests per model}
+
+\input{ext_detail.tex}
+
 \section{Hazard ratios of every model}
 
 \input{hr_table.tex}

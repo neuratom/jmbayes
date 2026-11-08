@@ -1,3 +1,4 @@
+\begingroup\small\setlength{\tabcolsep}{4pt}
 \begin{longtable}{llrr}
 \caption{Hazard ratios (posterior means, two seeds averaged) in JMbayes2 and jmbayes; up to 4 per model (all are in the repository).}\label{tab:hrall}\\
 \toprule Model & Term & JMbayes2 & jmbayes \\ \midrule \endfirsthead
@@ -10,7 +11,7 @@ Main model (PBC, 3 markers) & \texttt{sexfemale} & 0.517 & 0.515 \\
 \addlinespace
 Competing risks (PBC) & \texttt{sexfemale [transplanted]} & 2.169 & 2.140 \\
  & \texttt{sexfemale [dead]} & 0.702 & 0.703 \\
- & \texttt{value(log(serBilir)) [transplanted]} & 3.658 & 3.644 \\
+ & \texttt{value(log(serBilir)) [transplan\ldots} & 3.658 & 3.644 \\
  & \texttt{value(log(serBilir)) [dead]} & 3.271 & 3.269 \\
 \addlinespace
 Strata + late entry & \texttt{sexfemale} & 0.811 & 0.809 \\
@@ -31,7 +32,7 @@ Interval censoring & \texttt{sexfemale} & 0.896 & 0.896 \\
 \addlinespace
 Competing risks + entry + strata & \texttt{sexfemale [transplanted]} & 2.071 & 1.999 \\
  & \texttt{sexfemale [dead]} & 0.750 & 0.755 \\
- & \texttt{value(log(serBilir)) [transplanted]} & 3.546 & 3.464 \\
+ & \texttt{value(log(serBilir)) [transplan\ldots} & 3.546 & 3.464 \\
  & \texttt{value(log(serBilir)) [dead]} & 3.100 & 3.098 \\
 \addlinespace
 Effects per stratum & \texttt{sexfemale [placebo]} & 0.777 & 0.781 \\
@@ -55,23 +56,23 @@ Binomial (trials), beta-binomial & \texttt{sexfemale} & 1.105 & 1.059 \\
 \addlinespace
 Velocity, area & \texttt{sexfemale} & 0.836 & 0.835 \\
  & \texttt{value(log(serBilir))} & 1.801 & 1.985 \\
- & \texttt{velocity(log(serBilir), eps = 0.01,\ldots} & 32.075 & 30.115 \\
- & \texttt{area(log(serBilir), time\_window = 2)} & 1.920 & 1.744 \\
+ & \texttt{velocity(log(serBilir), eps = 0\ldots} & 32.075 & 30.115 \\
+ & \texttt{area(log(serBilir), time\_windo\ldots} & 1.920 & 1.744 \\
 \addlinespace
 expit, Dexp, acceleration & \texttt{sexfemale} & 0.779 & 0.774 \\
  & \texttt{vexpit(value(log(serBilir)))} & 198.969 & 195.992 \\
  & \texttt{acceleration(log(serBilir))} & 31.266 & 33.295 \\
- & \texttt{vexp(value(log(serBilir))):slope(lo\ldots} & 1.330 & 1.331 \\
+ & \texttt{vexp(value(log(serBilir))):slop\ldots} & 1.330 & 1.331 \\
 \addlinespace
 Value by sex, Delta & \texttt{sexfemale} & 0.549 & 0.544 \\
- & \texttt{Delta(log(serBilir), time\_window = 3)} & 10.120 & 9.674 \\
+ & \texttt{Delta(log(serBilir), time\_wind\ldots} & 10.120 & 9.674 \\
  & \texttt{value(log(serBilir)):sexmale} & 2.735 & 2.738 \\
  & \texttt{value(log(serBilir)):sexfemale} & 3.389 & 3.404 \\
 \addlinespace
 Time-varying association & \texttt{sexfemale} & 0.862 & 0.863 \\
  & \texttt{value(log(serBilir))} & 4.020 & 4.022 \\
- & \texttt{value(log(serBilir)):ns(year, knots\ldots} & 0.799 & 0.800 \\
- & \texttt{value(log(serBilir)):ns(year, knots\ldots} & 0.824 & 0.827 \\
+ & \texttt{value(log(serBilir)):ns(year, k\ldots} & 0.799 & 0.800 \\
+ & \texttt{value(log(serBilir)):ns(year, k\ldots} & 0.824 & 0.827 \\
 \addlinespace
 Weibull baseline & \texttt{sexfemale} & 0.831 & 0.832 \\
  & \texttt{value(log(serBilir))} & 3.423 & 3.419 \\
@@ -103,3 +104,4 @@ Prothrombin data & \texttt{treatprednisone} & 0.825 & 0.825 \\
  & \texttt{value(pro)} & 0.959 & 0.959 \\
 \addlinespace
 \end{longtable}
+\endgroup

@@ -38,6 +38,11 @@ def model_and_data(which):
                    jmb.Marker("bili_count", fixed=year + sex, random=year, family="poisson"),
                    jmb.Marker("prothrombin", fixed=year * sex, random=year,
                               family="student_t", df=4)]
+    elif which == "main":                  # the paper's main model (run_pbc2.py)
+        event = jmb.Event("years", "status2", sex)
+        markers = [jmb.Marker(var("serBilir").log(), fixed=year * sex, random=year),
+                   jmb.Marker("prothrombin", fixed=year * sex, random=year),
+                   jmb.Marker("ascites", fixed=year + sex, random=year, family="binomial")]
     elif which in ("aids", "prothro"):
         return _model_other(which)
     else:
