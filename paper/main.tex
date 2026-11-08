@@ -88,7 +88,7 @@ fixed effects without a matching random effect, association parameters and splin
 coefficients, and Gibbs or Metropolis steps for the covariance matrix $D$ and the residual
 variances. Hierarchical centring of the fixed effects is applied as in JMbayes2.
 
-\section{Methodology}
+\section{Methodology}\label{sec:design}
 
 \paragraph{Where the parallelism is.} We began by classifying the work in one MCMC
 iteration by the kind of parallelism it allows. The parameter blocks (random effects,
@@ -492,7 +492,8 @@ The speed-up needs a GPU that PyTorch drives through its CUDA interface: NVIDIA
 (tested here) or AMD with ROCm (not tested). Apple and Intel GPUs are not supported
 yet; there jmbayes runs on the CPU. On a CPU it is about as fast as JMbayes2, because it
 runs all chains in one process, which uses only the data parallelism. Combining both
-levels of Section~ef{sec:design}, with groups of chains in separate processes (MIMD, as
+levels of Section~
+ef{sec:design}, with groups of chains in separate processes (MIMD, as
 JMbayes2) and patients batched within each (SIMD), should make the CPU version faster too;
 we leave this to future work. jmbayes covers JMbayes2's model options, with three
 exceptions: survival covariates that are functions of the time variable (an interaction
