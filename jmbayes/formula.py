@@ -21,7 +21,34 @@ _FUN = re.compile(r"^(\w+)\((\w+)\)$")
 _NAME = re.compile(r"^[A-Za-z_.][\w.]*$")
 
 
+_SPLINE_KN = re.compile(r"^(ns|bs)\((\w+),(.+)\)$")
+
+
+def _num_vec(v):
+    v = v.strip()
+    m = re.match(r"^c\((.*)\)$", v)
+    return [float(x) for x in (m.group(1) if m else v).split(",") if x.strip()]
+
+
 def _factor(token: str) -> Terms:
+    m = _SPLINE_KN.match(token)
+    if m and ("=" in m.group(3)):
+        # ns(x, k = c(...), B = c(...)) / knots = / Boundary.knots = / df =
+        from jmbayes.assoc import _split_top
+        kw = {}
+        for a in _split_top(m.group(3), ","):
+            k, v = (x.strip() for x in a.split("=", 1))
+            if k in ("k", "knots"):
+                kw["knots"] = _num_vec(v)
+            elif k in ("B", "Boundary.knots", "Boundary"):
+                kw["boundary"] = _num_vec(v)
+            elif k == "df":
+                kw["df"] = int(float(v))
+            else:
+                raise ValueError(f"unknown spline option {k!r} in {token!r}")
+        from jmbayes.design import _spline
+        return Terms(((_spline(m.group(2), kw.get("df"), kw.get("knots"),
+                               kw.get("boundary"), m.group(1)),),))
     m = _SPLINE.match(token)
     if m:
         kind, x, named, df = m.group(1), m.group(2), bool(m.group(3)), int(m.group(4))

@@ -311,6 +311,17 @@ event = jmb.Event("tstop", "status", var("group") + var("age"), start="tstart",
 `fit.survival_table()` then also shows the frailty SD (`sigma_frailty`) and its effect on
 each terminal event (`frailty:T1`).
 
+**Multi-state models** (e.g. healthy -> ill -> dead) are fitted as in JMbayes2: one row
+per patient and possible transition, with the transition as strata (`jmb.ms_setup()`
+builds these rows from wide data, as JMbayes2's `ms_setup()`):
+
+```python
+event = jmb.Event("Tstop", "status", var("X"), start="Tstart", strata="transition",
+                  by_strata=True)
+fit = jmb.JointModel(event, marker, id="id", time="time").fit(
+    visits, ms_rows, base_hazard="Weibull")
+```
+
 **Competing risks** combine with late entry and strata: each cause then has a baseline
 hazard per stratum, as `strata(CRdrug)` with an interaction of cause and stratum in R.
 
@@ -322,13 +333,79 @@ Predictions are not available for recurrent-event models (nor in JMbayes2).
 **Tested against JMbayes2.** Each model fitted in both programs with two seeds, using
 the same equivalence tests as above:
 
-RESULTS_07
+| Model | Chains x iterations | Equivalent (±0.1 SD / ±0.2 SD) | Shown to differ | Largest difference |
+|---|---|---|---|---|
+| Strata (drug) + late entry; log bilirubin and prothrombin | 12 x 30,000 | 47 / 47 of 47 | 0 | 0.032 SD |
+| Negative binomial, Poisson and Student's t (df 4) markers | 12 x 30,000 | 50 / 50 of 50 | 0 | 0.034 SD |
+| Time-varying covariate (edema), counting-process rows | 8 x 15,000 | 23 / 23 of 23 | 0 | 0.026 SD |
+| Interval-censored event times | 8 x 15,000 | 17 / 22 of 22 | 0 | 0.077 SD |
+| Competing risks + late entry + strata (drug) | 8 x 15,000 | 12 / 21 of 60 | 0 | 0.231 SD |
+| Strata with effects per stratum; 2 markers | 8 x 15,000 | 26 / 34 of 50 | 0 | 0.056 SD |
+| Recurrent + terminal events, frailty, gap timescale (vignette data) | 8 x 15,000 | 12 / 23 of 38 | 0 | 0.154 SD |
+| Gamma, beta and censored normal markers | 8 x 15,000 | 46 / 50 of 50 | 0 | 0.038 SD |
+| Binomial with trials and beta-binomial markers | 8 x 15,000 | 6 / 7 of 25 | 0 | 0.244 SD |
+| Value + velocity (backward) + area over 2 years; spline marker | 8 x 15,000 | 9 / 25 of 27 | 0 | 0.115 SD |
+| expit(value) + Dexp(slope) + acceleration; spline marker | 8 x 15,000 | 20 / 25 of 27 | 0 | 0.120 SD |
+| Value by sex + Delta over 3 years; spline marker | 8 x 15,000 | 22 / 27 of 27 | 0 | 0.071 SD |
+| Time-varying association: value x ns(year, 3 knots) | 8 x 15,000 | 25 / 26 of 26 | 0 | 0.045 SD |
+| Weibull baseline hazard | 8 x 15,000 | 10 / 12 of 12 | 0 | 0.025 SD |
+| Piecewise-constant baseline hazard | 8 x 15,000 | 20 / 20 of 20 | 0 | 0.031 SD |
+| Natural cubic spline baseline hazard | 8 x 15,000 | 21 / 21 of 21 | 0 | 0.023 SD |
+| Multi-state (illness-death), Weibull hazards (vignette data) | 8 x 15,000 | 12 / 12 of 18 | 0 | 0.115 SD |
+| Case weights | 8 x 15,000 | 22 / 22 of 22 | 0 | 0.057 SD |
+| Horseshoe prior on associations, ridge on covariates; 2 markers | 8 x 15,000 | 26 / 37 of 39 | 0 | 0.045 SD |
+| AIDS data (467 patients): square-root CD4, drug + previous infection | 8 x 15,000 | 18 / 22 of 22 | 0 | 0.064 SD |
+| Prothrombin data (488 cirrhosis patients): prednisone vs placebo | 8 x 15,000 | 19 / 22 of 22 | 0 | 0.041 SD |
+
+No parameter in any model was shown to differ. Where fewer were shown equivalent
+(competing risks with late entry and strata, recurrent events, effects per stratum, the
+beta-binomial model, multi-state), two runs of the *same* program
+differed about as much as the two programs did: the chains mix slowly there, and longer
+runs are needed to settle it. In the beta-binomial model the associations of the two
+markers are nearly confounded (their random intercepts correlate at 0.98). The last two
+rows use other data sets that ship with JMbayes2. Timings are not given because these
+runs shared the machine; see the benchmark above for speed.
+
+Two bugs in jmbayes were found by these comparisons and fixed: lgamma-difference
+densities (beta-binomial, negative binomial, beta, gamma) lost precision in float32 at
+large dispersions, and statsmodels' L-BFGS could stop at a poor optimum of the separate
+linear mixed model (on the AIDS data; jmbayes now also tries Powell's method and keeps
+the better fit).
 
 For the families models both programs started from the same separate fits (R's), because
 some of GLMMadaptive's fits stop short of the maximum (Student's t of prothrombin; the
 censored normal fit by a wide margin) and jm() centres some priors on them. GLMMadaptive
 0.9 does not offer the unit Lindley family, so that one is checked against its density
 only. Scripts: `benchmark/run_ext.py`, `run_ext_R.R`, `run_ext2_R.R`, `compare_cr.py`.
+
+## How a marker enters the hazard
+
+By default the current value of each marker's mixed-model prediction enters the hazard
+(`value`). Like JMbayes2's `functional_forms`, you can use other forms, transform them,
+multiply them and let them interact with covariates:
+
+```python
+from jmbayes import assoc as A
+
+jmb.Marker(var("serBilir").log(), fixed=year, random=year, association=[
+    A.value(),                                    # current value
+    A.slope(eps=0.01, direction="backward"),      # rate of change (also A.velocity)
+    A.acceleration(),                             # second derivative
+    A.area(time_window=2),                        # average over the last 2 years
+    A.Delta(time_window=3),                       # change over the last 3 years
+    A.vexpit(A.value()),                          # expit of the value (also vexp, vlog, ...)
+    A.Dexp(A.slope()),                            # d/dt exp(value) = exp(value) * slope
+    A.value() & var("sex"),                       # a separate association per sex
+    *(A.value() * ns(year, knots=[3, 6, 9], boundary=[0, 14.5])),  # changes over time
+])
+```
+
+Plain names work for the simple cases: `association=["value", "slope", "area"]`. An
+interaction with a function of the time variable, as in the last line, gives an
+association that changes over follow-up (a time-varying coefficient, as in JMbayes2's
+vignette); `ie_time="column"` on a form freezes it at an intervention time. With R
+strings: `functional_forms="~ value(log(serBilir)) * ns(year, k = c(3, 6, 9), B = c(0,
+14.5)) + vexpit(slope(log(serBilir), eps = 0.01))"`.
 
 ## Your own data
 
@@ -374,9 +451,19 @@ model.fit(visits, patients,
           n_iter=12000, n_burnin=2000, n_thin=5,     # MCMC length (default 3500 / 500 / 1)
           n_chains=3,                                # more chains are cheap on a GPU
           device="cpu",                              # default: GPU if available
+          base_hazard="Weibull",                     # or "piecewise constant", ... (below)
+          penalty_alphas="horseshoe",                # shrinkage: "ridge" or "horseshoe"
           save_loglik=True,                          # keep the per-patient table (below)
           marginal_stats=False)                      # skip the marginal DIC/WAIC/LPML
 ```
+
+The log baseline hazard is quadratic B-splines with 9 segments by default, as in
+JMbayes2. `base_hazard` takes JMbayes2's names: `"piecewise constant"`, `"piecewise
+linear"`, `"Weibull"`, `"log time"`, `"natural cubic spline"`; or set `basis` (`"bs"` or
+`"ns"`), `Bsplines_degree`, `base_hazard_segments` and `timescale` (`"identity"` or
+`"log"`). `penalty_gammas` and `penalty_alphas` put ridge or horseshoe shrinkage priors
+on the covariate effects and the associations (`priors = list(penalty_alphas = ...)` in
+JMbayes2). Case weights: `jmb.Event(..., weights="w")`.
 
 `fit.fit_statistics` holds the conditional DIC, WAIC and LPML and
 `fit.marginal_fit_statistics` the marginal ones (random effects integrated out with a
@@ -392,11 +479,10 @@ chains × iterations × patients (patients in the order of `fit.patient_ids`). I
 Check convergence in `fit.survival_table()`: `Rhat` should be below about 1.05. If not,
 run longer or with more chains.
 
-Not supported yet (you get a clear error): the velocity, acceleration, coefs and Delta
-functional forms and transformation functions; time-varying coefficients (`tv()`);
-multi-state models; case weights; other baseline-hazard bases; shrinkage priors; interval
-censoring or recurrent events combined with late entry or competing risks; and
-predictions for recurrent-event models.
+Not supported yet (you get a clear error): survival covariates that are functions of the
+time variable (use an interaction in the association instead); interval censoring or
+recurrent events combined with late entry or competing risks; predictions for
+recurrent-event models.
 
 ## Prefer R formulas?
 

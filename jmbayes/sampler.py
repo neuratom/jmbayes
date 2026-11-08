@@ -30,7 +30,8 @@ import numpy as np
 import torch
 
 from jmbayes import families as fam
-from jmbayes.model import ModelData
+from jmbayes.assoc import torch_transform
+from jmbayes.model import ModelData, outcome_slots
 
 LOG2PI = math.log(2 * math.pi)
 CONST_UNIF = 0.5 * math.sqrt(12.0)
@@ -87,6 +88,9 @@ class JointModelSampler:
         self.W_H, self.W_h = t(md.W_H), t(md.W_h)
         self.log_Pwk = t(md.log_Pwk)
         self.event = t(md.event)
+        w = getattr(md, "weights", None)
+        # case weights: log w added to the log hazard of event rows (log_weights)
+        self.log_w = None if w is None else t(np.log(w))
         # survival rows: one per patient, or several (competing risks, counting-process
         # data, recurrent events); self.cr: rows are summed per patient
         self.R = len(md.event)
@@ -130,17 +134,25 @@ class JointModelSampler:
                 nhc=[int(c) for c in o.nhc], nhc_glob=[int(o.fe_cols[c]) for c in o.nhc],
                 nhc_idx=ti(np.asarray(o.fe_cols)[o.nhc])))
         self.n_out = len(self.outs)
-        # association columns (one per value()/slope()/area() term), each tied to an outcome
-        self.assoc = []
+        # functional forms ("slots": a linear predictor at quadrature points / event
+        # times) and the association columns built from them, each tied to an outcome:
+        # column = u * prod(transform(eta_slot))
+        self.slots, self.assoc = [], []
         for j, o in enumerate(md.outcomes):
-            for a in o.assoc:
-                self.assoc.append(dict(j=j, form=a["form"], X_H=t(a["X_H"]), Z_H=t(a["Z_H"]),
-                                       X_h=t(a["X_h"]), Z_h=t(a["Z_h"]),
+            sl, cols = outcome_slots(o)
+            off = len(self.slots)
+            for d in sl:
+                self.slots.append(dict(j=j, X_H=t(d["X_H"]), Z_H=t(d["Z_H"]),
+                                       X_h=t(d["X_h"]), Z_h=t(d["Z_h"])))
+            for a in cols:
+                self.assoc.append(dict(j=j, factors=[(off + k, tf) for k, tf in a["factors"]],
                                        u_H=t(a["u_H"]) if "u_H" in a else None,
                                        u_h=t(a["u_h"]) if "u_h" in a else None))
-        self.A = len(self.assoc)
+        self.A, self.nS = len(self.assoc), len(self.slots)
         self.cols_of = [[c for c, a in enumerate(self.assoc) if a["j"] == j]
                         for j in range(self.n_out)]
+        self.slots_of = [[k for k, d in enumerate(self.slots) if d["j"] == j]
+                         for j in range(self.n_out)]
         self.X_dot = t(md.X_dot)
         self.ind_FE_HC = ti(md.ind_FE_HC)
         self.patterns = [(ti(s), ti(r), ti(f)) for s, r, f in md.patterns]
@@ -158,6 +170,9 @@ class JointModelSampler:
         self.Tau_mean_HC = self.pr["Tau_betas_HC"] @ self.pr["mean_betas_HC"]
         nb = md.W0_H.shape[1] // self.S
         self.Tau_bs1 = self.pr["Tau_bs_gammas"][:nb, :nb]          # one stratum's block
+        self.pen_bs = bool(pr.get("penalized_bs_gammas", True))
+        self.pen_g = pr.get("penalty_gammas", "none")
+        self.pen_a = pr.get("penalty_alphas", "none")
         i = np.arange(1, self.q)
         self.lkj_coef = t(self.q - i - 1.0 + 2.0 * pr["D_L_etaLKJ"] - 2.0)
 
@@ -182,10 +197,10 @@ class JointModelSampler:
         out = torch.zeros(eta.shape[0], self.n, dtype=self.dt, device=self.dev)
         return out.index_add_(1, o["sid"], self.ll_long_obs(j, eta, sigma))
 
-    def eta_surv(self, c, betas, b, where):
-        """Linear predictor of association column c at quadrature points (H) or event
-        times (h)."""
-        a = self.assoc[c]
+    def eta_surv(self, k, betas, b, where):
+        """Linear predictor of form (slot) k at quadrature points (H) or event times
+        (h)."""
+        a = self.slots[k]
         o = self.outs[a["j"]]
         bj = b[:, :, o["re"]]
         if where == "H":
@@ -197,18 +212,28 @@ class JointModelSampler:
                 bj = bj[:, self.idT, :]
         return betas[:, o["fe"]] @ X.T + (Z * bj).sum(-1)
 
-    def wlong_col(self, c, eta):
+    def wlong_col(self, c, etas, where):
+        """Standardised association column c from the slot predictors etas[k]."""
         a = self.assoc[c]
-        if a["u_H"] is not None:          # cause-specific column: zero on other causes' rows
-            eta = eta * (a["u_H"] if eta.shape[-1] == a["u_H"].shape[0] else a["u_h"])
-        return (eta - self.Wlong_bar[c]) * self.Wlong_isd[c]
+        w = None
+        for k, tf in a["factors"]:
+            v = torch_transform(tf, etas[k])
+            w = v if w is None else w * v
+        u = a["u_H"] if where == "H" else a["u_h"]
+        if u is not None:                 # interaction / cause-specific column
+            w = w * u
+        return (w - self.Wlong_bar[c]) * self.Wlong_isd[c]
+
+    def slot_etas(self, s, where):
+        return {k: s[f"s{where}{k}"] for k in range(self.nS)}
 
     def refresh_assoc(self, s, betas, b):
-        for c in range(self.A):
-            s[f"etaH{c}"] = self.eta_surv(c, betas, b, "H").contiguous()
-            s[f"etah{c}"] = self.eta_surv(c, betas, b, "h").contiguous()
-        s["WlH"] = torch.stack([self.wlong_col(c, s[f"etaH{c}"]) for c in range(self.A)], -1)
-        s["Wlh"] = torch.stack([self.wlong_col(c, s[f"etah{c}"]) for c in range(self.A)], -1)
+        for k in range(self.nS):
+            s[f"sH{k}"] = self.eta_surv(k, betas, b, "H").contiguous()
+            s[f"sh{k}"] = self.eta_surv(k, betas, b, "h").contiguous()
+        eH, eh = self.slot_etas(s, "H"), self.slot_etas(s, "h")
+        s["WlH"] = torch.stack([self.wlong_col(c, eH, "H") for c in range(self.A)], -1)
+        s["Wlh"] = torch.stack([self.wlong_col(c, eh, "h") for c in range(self.A)], -1)
         s["WlH_a"] = (s["WlH"] * s["alphas"][:, None, :]).sum(-1)
         s["Wlh_a"] = (s["Wlh"] * s["alphas"][:, None, :]).sum(-1)
 
@@ -225,6 +250,8 @@ class JointModelSampler:
         lh = W0h_bs + Wh_g + Wlh_a
         if Fh is not None:
             lh = lh + Fh
+        if self.log_w is not None:
+            lh = lh + self.log_w
         out = -H + self.event * lh
         if self.left is not None:
             out = torch.where(self.left, torch.log(-torch.expm1(-H)), out)
@@ -261,18 +288,53 @@ class JointModelSampler:
         """logPrior_surv(); with recurrent events it includes the prior of alphaF (pass
         alphaF to override the current value)."""
         pr = self.pr
-        if self.S > 1:
-            out = (-0.5 * (tau_bs * self.bs_quad(bs)).sum(-1)
-                   - 0.5 * self.quad(gammas, pr["mean_gammas"], pr["Tau_gammas"])
-                   - 0.5 * self.quad(alphas, pr["mean_alphas"], pr["Tau_alphas"]))
-        else:
-            out = (-0.5 * tau_bs * self.quad(bs, pr["mean_bs_gammas"], pr["Tau_bs_gammas"])
-                   - 0.5 * self.quad(gammas, pr["mean_gammas"], pr["Tau_gammas"])
-                   - 0.5 * self.quad(alphas, pr["mean_alphas"], pr["Tau_alphas"]))
+        out = (-0.5 * (tau_bs * self.bs_quad(bs)).sum(-1) if self.S > 1 else
+               -0.5 * tau_bs * self.quad(bs, pr["mean_bs_gammas"], pr["Tau_bs_gammas"]))
+        out = out + self._coef_prior(gammas, "g") + self._coef_prior(alphas, "a")
         if self.rec:
             aF = self._s["alphaF"] if alphaF is None else alphaF
             out = out - 0.5 * self.quad(aF, pr["mean_alphaF"], pr["Tau_alphaF"])
         return out
+
+    def _coef_prior(self, x, which):
+        """logPrior() of gammas / alphas; with a penalty the precision's diagonal is the
+        lambdas, scaled by tau (shrink = TRUE in JMbayes2)."""
+        pr = self.pr
+        mean, Tau = ((pr["mean_gammas"], pr["Tau_gammas"]) if which == "g"
+                     else (pr["mean_alphas"], pr["Tau_alphas"]))
+        if (self.pen_g if which == "g" else self.pen_a) == "none":
+            return -0.5 * self.quad(x, mean, Tau)
+        s = self._s
+        z = x - mean
+        return -0.5 * s[f"tau_{which}"] * (s[f"lam_{which}"] * z * z).sum(-1)
+
+    def update_penalties(self, s, which):
+        """update_penalties() (JMbayes2_penalties.h): Gibbs draws of the shrinkage
+        parameters (ridge: lambdas and tau; horseshoe: also nus and xi). As JMbayes2,
+        these use the squared coefficients themselves (not minus the prior mean)."""
+        pr = self.pr
+        x = s["gammas"] if which == "g" else s["alphas"]
+        nm = "gammas" if which == "g" else "alphas"
+        single = (self.pen_g if which == "g" else self.pen_a) == "ridge"
+        rg = lambda shape, rate: torch._standard_gamma(shape) / rate  # noqa: E731
+        c2 = x * x
+        p = x.shape[1]
+        lam, tau = s[f"lam_{which}"], s[f"tau_{which}"]
+        A_l = torch.full_like(lam, pr[f"A_lambda_{nm}"] + 0.5)
+        if single:
+            lam = rg(A_l, pr[f"B_lambda_{nm}"] + 0.5 * tau[:, None] * c2)
+            tau = rg(torch.full_like(tau, pr[f"A_tau_{nm}"] + 0.5 * p),
+                     pr[f"B_tau_{nm}"] + 0.5 * (lam * c2).sum(-1))
+        else:
+            nu, xi = s[f"nu_{which}"], s[f"xi_{which}"]
+            lam = rg(A_l, nu + 0.5 * tau[:, None] * c2)
+            tau = rg(torch.full_like(tau, pr[f"A_tau_{nm}"] + 0.5 * p),
+                     xi + 0.5 * (lam * c2).sum(-1))
+            s[f"nu_{which}"] = rg(torch.full_like(nu, pr[f"A_nu_{nm}"] + 0.5),
+                                 pr[f"B_nu_{nm}"] + lam)
+            s[f"xi_{which}"] = rg(torch.full_like(xi, pr[f"A_xi_{nm}"] + 0.5),
+                                 pr[f"B_xi_{nm}"] + tau)
+        s[f"lam_{which}"], s[f"tau_{which}"] = lam, tau
 
     def lkj(self, L):
         d = torch.diagonal(L, dim1=-2, dim2=-1)[:, 1:]
@@ -387,6 +449,12 @@ class JointModelSampler:
         s["sds"] = self.t(np.tile(sds, (C, 1)))
         s["L"] = self.t(np.tile(L, (C, 1, 1)))
         self._s = s
+        for which, pen, k in (("g", self.pen_g, s["gammas"].shape[1]),
+                              ("a", self.pen_a, s["alphas"].shape[1])):
+            if pen != "none":
+                o = lambda *sh: torch.ones(*sh, dtype=dt, device=dev)  # noqa: E731
+                s[f"lam_{which}"], s[f"tau_{which}"] = o(C, k), o(C)
+                s[f"nu_{which}"], s[f"xi_{which}"] = o(C, k), o(C)
         if self.rec:
             s["frailty"] = self.t(jit(ini["frailty"]))
             s["alphaF"] = self.t(jit(ini["alphaF"]))
@@ -458,22 +526,26 @@ class JointModelSampler:
     def assoc_shift(self, s, j, shifts):
         """Proposed association columns of outcome j when its linear predictors move by
         shifts(a) -> (shift at quadrature points, shift at event times)."""
-        prop = dict(WlH_a=s["WlH_a"], Wlh_a=s["Wlh_a"], cols={})
+        prop = dict(WlH_a=s["WlH_a"], Wlh_a=s["Wlh_a"], cols={}, slots={})
+        eH_all, eh_all = self.slot_etas(s, "H"), self.slot_etas(s, "h")
+        for k in self.slots_of[j]:
+            dH, dh = shifts(self.slots[k])
+            eH_all[k], eh_all[k] = s[f"sH{k}"] + dH, s[f"sh{k}"] + dh
+            prop["slots"][k] = (eH_all[k], eh_all[k])
         for c in self.cols_of[j]:
-            dH, dh = shifts(self.assoc[c])
-            eH, eh = s[f"etaH{c}"] + dH, s[f"etah{c}"] + dh
-            wH, wh = self.wlong_col(c, eH), self.wlong_col(c, eh)
+            wH, wh = self.wlong_col(c, eH_all, "H"), self.wlong_col(c, eh_all, "h")
             ac = s["alphas"][:, c:c + 1]
             prop["WlH_a"] = prop["WlH_a"] + ac * (wH - s["WlH"][..., c])
             prop["Wlh_a"] = prop["Wlh_a"] + ac * (wh - s["Wlh"][..., c])
-            prop["cols"][c] = (eH, eh, wH, wh)
+            prop["cols"][c] = (wH, wh)
         return prop
 
     def assoc_accept(self, s, prop, accH, acch):
         """Keep the proposed association columns where accepted."""
-        for c, (eH, eh, wH, wh) in prop["cols"].items():
-            s[f"etaH{c}"] = torch.where(accH, eH, s[f"etaH{c}"])
-            s[f"etah{c}"] = torch.where(acch, eh, s[f"etah{c}"])
+        for k, (eH, eh) in prop["slots"].items():
+            s[f"sH{k}"] = torch.where(accH, eH, s[f"sH{k}"])
+            s[f"sh{k}"] = torch.where(acch, eh, s[f"sh{k}"])
+        for c, (wH, wh) in prop["cols"].items():
             s["WlH"][..., c] = torch.where(accH, wH, s["WlH"][..., c])
             s["Wlh"][..., c] = torch.where(acch, wh, s["Wlh"][..., c])
         s["WlH_a"] = torch.where(accH, prop["WlH_a"], s["WlH_a"])
@@ -524,6 +596,8 @@ class JointModelSampler:
 
     def update_tau(self, s):
         pr = self.pr
+        if not self.pen_bs:                # Weibull baseline: tau fixed at 1
+            return
         quad = (self.quad(s["bs"], pr["mean_bs_gammas"] * 0, pr["Tau_bs_gammas"])
                 if self.S == 1 else self.bs_quad(s["bs"]))      # one tau per stratum
         shape = pr["A_tau_bs_gammas"] + 0.5 * pr["rank_Tau_bs_gammas"]
@@ -769,8 +843,12 @@ class JointModelSampler:
         if s["gammas"].shape[1]:
             self.update_vector(s, "gammas", "sc_g", self.W_H, self.W_h, "WH_g", "Wh_g", itf)
             self.record(s, "r_gammas", s["gammas"])
+            if self.pen_g != "none":
+                self.update_penalties(s, "g")
         self.update_alphas(s, itf)
         self.record(s, "r_alphas", s["alphas"])
+        if self.pen_a != "none":
+            self.update_penalties(s, "a")
         if self.rec:
             self.update_frailty(s, itf, keep)
             self.update_sigmaF(s, itf)

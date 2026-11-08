@@ -26,6 +26,14 @@ MARGINS = (0.1, 0.2)
 Z90 = 1.6448536269514722
 
 
+def _num(v):
+    """R writes Inf/NA/NaN as strings."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 def rows_of(run, blk):
     """(mean, posterior SD, MCSE) per parameter, from an R or a Python result file."""
     if "stats" in run:
@@ -89,7 +97,7 @@ def main(model="cr"):
         R_vs_R=dict(median=float(np.median(d_rr)), max=float(d_rr.max())),
         Py_vs_Py=dict(median=float(np.median(d_pp)), max=float(d_pp.max())),
         hazard_ratios=hr, parameters=cmp,
-        fit_stats={kind: {prog: {k: float(np.mean([r[kind][k] for r in runs]))
+        fit_stats={kind: {prog: {k: float(np.mean([_num(r[kind][k]) for r in runs]))
                                  for k in ("DIC", "pD", "WAIC", "LPML")}
                           for prog, runs in (("R", R), ("Python", P))}
                    for kind in ("fit_stats", "fit_stats_marginal")

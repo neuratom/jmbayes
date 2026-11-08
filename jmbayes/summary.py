@@ -116,9 +116,10 @@ def collect(md: ModelData, out: dict, n_thin=1):
     blocks["bs_gammas"] = (sw(out["bs_gammas"]),
                            [f"bs_gammas_{k + 1}" for k in range(out["bs_gammas"].shape[2])])
     n_tau = out["tau_bs_gammas"].shape[2]
-    blocks["tau_bs_gammas"] = (sw(out["tau_bs_gammas"]),
-                               ["tau_bs_gammas"] if n_tau == 1
-                               else [f"tau_bs_gammas_{k + 1}" for k in range(n_tau)])
+    if md.priors.get("penalized_bs_gammas", True):     # (fixed for a Weibull baseline)
+        blocks["tau_bs_gammas"] = (sw(out["tau_bs_gammas"]),
+                                   ["tau_bs_gammas"] if n_tau == 1
+                                   else [f"tau_bs_gammas_{k + 1}" for k in range(n_tau)])
     if "sigmaF" in out:
         blocks["sigmaF"] = (sw(out["sigmaF"]), ["sigma_frailty"])
         lev = md.strata_levels or []
@@ -180,11 +181,13 @@ def loglik_params(sampler, P: dict, b):
     try:
         ll_long = sum(s_.ll_long_subj(j, s_.eta_long(j, T["betas"], bb), T["sigmas"][:, j])
                       for j in range(s_.n_out))
-        etaH = [s_.eta_surv(c, T["betas"], bb, "H") for c in range(s_.A)]
-        etah = [s_.eta_surv(c, T["betas"], bb, "h") for c in range(s_.A)]
+        etaH = {k: s_.eta_surv(k, T["betas"], bb, "H") for k in range(s_.nS)}
+        etah = {k: s_.eta_surv(k, T["betas"], bb, "h") for k in range(s_.nS)}
         z = torch.zeros(B, 1, 0, dtype=s_.dt, device=s_.dev)
-        WlH = torch.stack([s_.wlong_col(c, e) for c, e in enumerate(etaH)], -1) if etaH else z
-        Wlh = torch.stack([s_.wlong_col(c, e) for c, e in enumerate(etah)], -1) if etah else z
+        WlH = (torch.stack([s_.wlong_col(c, etaH, "H") for c in range(s_.A)], -1)
+               if s_.A else z)
+        Wlh = (torch.stack([s_.wlong_col(c, etah, "h") for c in range(s_.A)], -1)
+               if s_.A else z)
         a = T["alphas"][:, None, :]
         FH = Fh = None
         if s_.rec:

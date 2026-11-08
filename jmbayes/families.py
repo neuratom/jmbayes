@@ -69,9 +69,28 @@ def precompute(family, y, aux=None):
     return pre
 
 
+# Families whose density is a difference of large lgamma terms when the dispersion is
+# large (e.g. lgamma(y + A) - lgamma(A) with A ~ 1e4). In float32 the rounding error then
+# exceeds the signal and the sampler drifts to huge dispersions, so these are computed
+# in float64.
+WIDE = ("negative_binomial", "beta", "gamma", "beta_binomial")
+
+
 def log_dens(family, y, eta, sigma, df=0.0, pre=None):
     """Log density of each observation. eta: (..., N); sigma broadcastable to eta.
     pre: precompute(family, y, aux)."""
+    if family in WIDE and eta.dtype != torch.float64:
+        if pre is None:
+            pre = precompute(family, y)
+        d = torch.float64
+        pre = {k: v.to(d) if v.is_floating_point() else v for k, v in pre.items()}
+        out = _log_dens(family, y.to(d), eta.to(d), torch.as_tensor(sigma).to(eta.device, d),
+                        df, pre)
+        return out.to(eta.dtype)
+    return _log_dens(family, y, eta, sigma, df, pre)
+
+
+def _log_dens(family, y, eta, sigma, df=0.0, pre=None):
     if family == "gaussian":
         return -torch.log(sigma) - 0.5 * LOG2PI - (y - eta) ** 2 / (2 * sigma * sigma)
     if pre is None:

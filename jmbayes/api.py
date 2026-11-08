@@ -38,7 +38,7 @@ from jmbayes import formula as fm
 from jmbayes import summary as sm
 from jmbayes.design import Response, Terms, as_terms
 from jmbayes.families import FAMILIES
-from jmbayes.model import ModelData, jm_setup
+from jmbayes.model import ModelData, base_hazard_config, jm_setup
 from jmbayes.sampler import JointModelSampler
 
 _FAMILIES = set(FAMILIES)
@@ -58,7 +58,9 @@ def _family(name: str) -> str:
         raise NotImplementedError(
             f"family '{name}' is not supported yet (supported: {sorted(_FAMILIES)})")
     return f
-_FORMS = ("value", "slope", "area")
+from jmbayes import assoc as asc  # noqa: E402
+
+_FORMS = asc.FORMS
 _DTYPES = {"float64": torch.float64, "float32": torch.float32}
 
 
@@ -86,8 +88,13 @@ class Marker:
     censoring: "censored_normal": column coded 0 (observed), 1 (left-censored: the true
                value is at most the recorded one, e.g. below a detection limit) or
                2 (right-censored: at least the recorded one)
-    association: how the marker enters the hazard, any of "value" (current value),
-               "slope" (current rate of change), "area" (average from 0 to t)
+    association: how the marker enters the hazard: one or a list of "value" (current
+               value), "slope" / "velocity" (rate of change), "acceleration", "area"
+               (average from 0 to t), "Delta" (change since 0), "coefs", or terms from
+               jmbayes.assoc with options, transformations and interactions, e.g.
+               A.slope(eps=0.01), A.area(time_window=2), A.vexpit(A.value()),
+               A.value() & var("sex"), A.value() * ns(year, knots=[3, 6], boundary=[0, 15])
+               (a time-varying association), A.Dexp(A.slope())
     uncorrelated: True for independent random effects (R's "||")
     """
     response: str | Response
@@ -126,12 +133,7 @@ class Marker:
             raise ValueError("give the transform either in response or in transform=, not both")
         self.fixed = Terms(as_terms(self.fixed).terms)
         self.random = Terms(as_terms(self.random).terms)
-        if isinstance(self.association, str):
-            self.association = [self.association]
-        bad = [f for f in self.association if f not in _FORMS]
-        if bad or not self.association:
-            raise NotImplementedError(f"association {bad} not supported (use {_FORMS})")
-        self.association = list(self.association)
+        self.association = asc.as_assoc_list(self.association)
 
     @property
     def name(self) -> str:
@@ -168,6 +170,8 @@ class Event:
     time2:      interval censoring (Surv(time, time2, event, type = "interval")): the
                 event column is then coded 0 right-censored at time, 1 event at time,
                 2 left-censored (event before time), 3 event between time and time2
+    weights:    column of case weights (coxph(weights = ) in R); as JMbayes2, they
+                multiply the hazard of each event (log w is added to its log hazard)
     recurrent:  "gap" or "calendar": recurrent events with a frailty, as
                 jm(..., recurrent = ). Needs start= (rows per risk interval) and strata=,
                 the first stratum being the recurrent event and any further strata
@@ -182,6 +186,7 @@ class Event:
     by_strata: bool = False
     time2: str | None = None
     recurrent: str | None = None
+    weights: str | None = None
 
     def __post_init__(self):
         self.covariates = as_terms(self.covariates).without_intercept()
@@ -229,6 +234,9 @@ class JointModel:
             n_iter: int | None = None, n_burnin: int = 500, n_thin: int = 1,
             n_chains: int = 3, seed: int = 123, device: str | None = None,
             base_hazard_segments: int = 9, Bsplines_degree: int = 2,
+            base_hazard: str | None = None, basis: str = "bs",
+            timescale: str = "identity", penalty_gammas: str = "none",
+            penalty_alphas: str = "none",
             initial_fits: dict | None = None, dtype: str = "float32",
             save_loglik: bool = False, marginal_stats: bool = True,
             verbose: bool = True) -> "JointModelFit":
@@ -250,6 +258,14 @@ class JointModel:
                   numbers of memory (e.g. 2.2 GB for 2,000 patients, 3 chains, 90,000
                   iterations in float32). Use it for checks that need every draw, such as
                   PSIS-LOO and its Pareto-k diagnostic.
+        base_hazard: shape of the log baseline hazard, as jm(base_hazard = ): None (the
+                  default: quadratic B-splines with 9 segments), "piecewise constant",
+                  "piecewise linear", "Weibull", "log time" or "natural cubic spline";
+                  or set basis ("bs" / "ns"), Bsplines_degree, base_hazard_segments and
+                  timescale ("identity" / "log") directly
+        penalty_gammas, penalty_alphas: shrinkage priors for the covariate effects and
+                  the association parameters, as jm(priors = list(penalty_gammas = ,
+                  penalty_alphas = )): "none" (default), "ridge" or "horseshoe"
         initial_fits: optional separate fits exported from R (benchmark/export_initfits.R)
         marginal_stats: also compute the marginal DIC, WAIC and LPML (random effects
                   integrated out by a Laplace approximation, as JMbayes2), in
@@ -258,7 +274,9 @@ class JointModel:
         """
         return _fit(self, visits, patients, n_iter=n_iter, n_burnin=n_burnin, n_thin=n_thin,
                     n_chains=n_chains, seed=seed, device=device,
-                    base_hazard_segments=base_hazard_segments,
+                    base_hazard_segments=base_hazard_segments, base_hazard=base_hazard,
+                    basis=basis, timescale=timescale, penalty_gammas=penalty_gammas,
+                    penalty_alphas=penalty_alphas,
                     Bsplines_degree=Bsplines_degree, initial_fits=initial_fits,
                     dtype=dtype, save_loglik=save_loglik, marginal_stats=marginal_stats,
                     verbose=verbose)
@@ -607,17 +625,12 @@ def parse_functional_forms(functional_forms, responses):
     if isinstance(functional_forms, dict):
         for resp, spec in functional_forms.items():
             if isinstance(spec, str):
-                spec = sum(fm.parse_functional_forms(spec).values(), [])
-            out[key(resp)] += list(spec)
+                spec = asc.parse(spec, responses).get(key(resp), [])
+            out[key(resp)] += asc.as_assoc_list(spec)
     elif functional_forms is not None:
-        for resp, forms in fm.parse_functional_forms(functional_forms).items():
+        for resp, forms in asc.parse(functional_forms, responses).items():
             out[key(resp)] += forms
-    for v in out.values():
-        bad = [f for f in v if f not in _FORMS]
-        if bad:
-            raise NotImplementedError(f"functional forms {bad} are not supported yet "
-                                      f"(supported: {', '.join(_FORMS)})")
-    return {r: (v or ["value"]) for r, v in out.items()}
+    return {r: (v or [asc.value()]) for r, v in out.items()}
 
 
 def jm(survival: Survival, longitudinal: list[Longitudinal] | Longitudinal,
@@ -650,13 +663,16 @@ def jm(survival: Survival, longitudinal: list[Longitudinal] | Longitudinal,
 
 def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_chains, seed,
          device, base_hazard_segments, Bsplines_degree, initial_fits, dtype, verbose,
+         base_hazard=None, basis="bs", timescale="identity", penalty_gammas="none",
+         penalty_alphas="none",
          save_loglik=False, marginal_stats=True):
     dt = _DTYPES.get(str(dtype).replace("torch.", ""))
     if dt is None:
         raise ValueError(f"dtype must be 'float64' or 'float32', got {dtype!r} (16-bit "
                          "formats are too coarse for MCMC acceptance decisions)")
     ev = model.event
-    ck.check_patients(patients, model.id, ev.time, ev.event, ev.covariates.variables(),
+    ck.check_patients(patients, model.id, ev.time, ev.event,
+                      [*ev.covariates.variables(), *([ev.weights] if ev.weights else [])],
                       censored=ev.censored, start=ev.start, strata=ev.strata,
                       time2=ev.time2, recurrent=ev.recurrent)
     causes = ck.event_causes(patients[model.event.event], model.event.censored)
@@ -679,9 +695,13 @@ def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_cha
                   covariates=model.event.covariates, causes=causes,
                   censored=model.event.censored, start=model.event.start,
                   strata=model.event.strata, by_strata=model.event.by_strata,
-                  time2=model.event.time2, recurrent=model.event.recurrent),
+                  time2=model.event.time2, recurrent=model.event.recurrent,
+                  weights=model.event.weights),
         id_var=model.id, time_var=model.time, base_hazard_segments=base_hazard_segments,
-        Bsplines_degree=Bsplines_degree, initial_fits=initial_fits)
+        Bsplines_degree=Bsplines_degree, initial_fits=initial_fits,
+        base_hazard=base_hazard_config(base_hazard, basis, Bsplines_degree,
+                                       base_hazard_segments, timescale),
+        penalty_gammas=penalty_gammas, penalty_alphas=penalty_alphas)
     t_setup = time.perf_counter() - t0
     if n_iter is None:
         n_iter = 6500 if any(len(o.nhc) for o in md.outcomes) else 3500

@@ -43,6 +43,8 @@ class SplineBasis:
     df: int
     kind: str = "ns"            # "ns" natural cubic, "bs" cubic B-spline
     named: bool = False         # written "ns(x, df = 2)" in an R formula (names only)
+    knots: tuple | None = None  # interior knots given explicitly (else quantiles)
+    boundary: tuple | None = None
 
     @property
     def variables(self):
@@ -50,6 +52,14 @@ class SplineBasis:
 
     @property
     def label(self):
+        if self.knots is not None or self.boundary is not None:
+            f = lambda v: ", ".join(f"{x:g}" for x in v)  # noqa: E731
+            parts = [self.var]
+            if self.knots is not None:
+                parts.append(f"knots = c({f(self.knots)})")
+            if self.boundary is not None:
+                parts.append(f"Boundary.knots = c({f(self.boundary)})")
+            return f"{self.kind}({', '.join(parts)})"
         df = f"df = {self.df}" if self.named else str(self.df)
         return f"{self.kind}({self.var}, {df})"
 
@@ -160,14 +170,30 @@ def var(name: str) -> Terms:
     return Terms(((Column(name),),))
 
 
-def ns(x, df: int) -> Terms:
-    """Natural cubic spline of a numeric column (same basis as R's splines::ns)."""
-    return Terms(((SplineBasis(_name_of(x), int(df), "ns"),),))
+def ns(x, df: int | None = None, knots=None, boundary=None) -> Terms:
+    """Natural cubic spline of a numeric column (same basis as R's splines::ns). Give
+    df (knots at quantiles of the fitting data), or the interior knots and optionally
+    the boundary knots, as ns(x, knots = c(3, 6, 9), Boundary.knots = c(0, 14.5))."""
+    return Terms(((_spline(x, df, knots, boundary, "ns"),),))
 
 
-def bs(x, df: int) -> Terms:
+def bs(x, df: int | None = None, knots=None, boundary=None) -> Terms:
     """Cubic B-spline of a numeric column (same basis as R's splines::bs)."""
-    return Terms(((SplineBasis(_name_of(x), int(df), "bs"),),))
+    return Terms(((_spline(x, df, knots, boundary, "bs"),),))
+
+
+def _spline(x, df, knots, boundary, kind):
+    if knots is None:
+        if df is None:
+            raise ValueError(f"{kind}(): give df or knots")
+        return SplineBasis(_name_of(x), int(df), kind,
+                           boundary=None if boundary is None else tuple(map(float, boundary)))
+    knots = tuple(map(float, knots))
+    n = len(knots) + (1 if kind == "ns" else 3)
+    if df is not None and int(df) != n:
+        raise ValueError(f"{kind}(): df = {df} does not match {len(knots)} interior knots")
+    return SplineBasis(_name_of(x), n, kind, knots=knots,
+                       boundary=None if boundary is None else tuple(map(float, boundary)))
 
 
 def _name_of(x):
@@ -222,7 +248,8 @@ def _factor_columns(df: pd.DataFrame, f, levels: dict):
     if isinstance(f, SplineBasis):
         from jmbayes.splines import SplineSpec
         if f not in levels:                      # knots fixed on the fitting data
-            levels[f] = SplineSpec.fit(f.kind, df[f.var].to_numpy(float), f.df)
+            levels[f] = SplineSpec.fit(f.kind, df[f.var].to_numpy(float), f.df,
+                                       knots=f.knots, boundary=f.boundary)
         B = levels[f].basis(df[f.var].to_numpy(float))
         return [(f"{f.label}{j + 1}", B[:, j]) for j in range(B.shape[1])]
     s = df[f.name]

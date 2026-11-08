@@ -74,14 +74,20 @@ def _qr_qty(qr, qraux, y):
 class SplineSpec:
     """Knots fixed on the fitting data and reused for new data (like makepredictcall)."""
 
-    def __init__(self, kind, df, knots, boundary, degree=3):
+    def __init__(self, kind, df, knots, boundary, degree=3, intercept=False):
         self.kind, self.df, self.knots, self.boundary, self.degree = (
             kind, df, np.asarray(knots, float), np.asarray(boundary, float), degree)
+        self.intercept = intercept
 
     @classmethod
-    def fit(cls, kind, x, df, degree=3):
+    def fit(cls, kind, x, df, degree=3, knots=None, boundary=None):
         x = np.asarray(x, float)
-        boundary = np.array([x.min(), x.max()])
+        if knots is not None:
+            bnd = (np.array([x.min(), x.max()]) if boundary is None
+                   else np.asarray(boundary, float))
+            return cls(kind, df, np.asarray(knots, float), bnd, degree)
+        boundary = (np.array([x.min(), x.max()]) if boundary is None
+                    else np.asarray(boundary, float))
         if kind == "ns":
             n_inner = df - 1                          # intercept = FALSE
         else:
@@ -113,7 +119,8 @@ class SplineSpec:
         if inside.any():
             basis[inside] = spline_design(aknots, x[inside], 4)
         const = spline_design(aknots, bk, 4, [2, 2])
-        const, basis = const[:, 1:], basis[:, 1:]     # intercept = FALSE
+        if not getattr(self, "intercept", False):
+            const, basis = const[:, 1:], basis[:, 1:]  # intercept = FALSE
         qr, qraux = _linpack_qr(const.T)
         return _qr_qty(qr, qraux, basis.T).T[:, 2:]
 

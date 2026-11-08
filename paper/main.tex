@@ -6,6 +6,7 @@
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx}
 \usepackage{booktabs}
+\usepackage{longtable}
 \usepackage[hidelinks]{hyperref}
 
 \title{\textbf{jmbayes}: fast, memory-efficient, data-parallel\\
@@ -20,11 +21,10 @@ Bayesian joint models for longitudinal and time-to-event data}
 We present \textbf{jmbayes}, a data-parallel reimplementation of the R package JMbayes2,
 a widely used tool for Bayesian joint models of longitudinal and time-to-event data. It
 fits the same model, with the same priors and the same Markov chain Monte Carlo (MCMC)
-algorithm, and gives statistically equivalent results. On the largest problem we tested it was
+algorithm, and gives empirically equivalent results: the same estimates, within
+Monte Carlo error, shown by formal equivalence tests. On the largest problem we tested it was
 10$\times$ faster with 27$\times$ less memory, and the gap grew with problem size. For 3,120 patients and 90,000 iterations, JMbayes2 took
-104 minutes and 37.8~GB of RAM; jmbayes took 11 minutes and 1.4~GB. The speed-up grows with
-the problem: 3.3$\times$ on 312 patients, 8--9$\times$ on 1,560--3,120 patients at
-JMbayes2's default run length, and 9.7--10.5$\times$ on long runs with 3,120 patients, still growing at the largest size tested. jmbayes's memory stayed at
+104 minutes and 37.8~GB of RAM; jmbayes took 11 minutes and 1.4~GB. jmbayes's memory stayed at
 1.3--1.4~GB of RAM and under 0.2~GB of GPU memory in every run, up to 90,000 iterations,
 while JMbayes2's grew with patients $\times$ iterations beyond the capacity of a typical
 workstation. The gains come from restructuring the computation, not from changing the
@@ -34,8 +34,11 @@ the fit statistics (DIC, WAIC, LPML) are computed exactly from running totals in
 stored per-patient log-likelihood for every draw. In formal equivalence tests on the
 primary biliary cholangitis (PBC) data, all 50 model parameters agreed with JMbayes2 within
 0.2 posterior standard deviations, and the two programs differed from each other less than
-two JMbayes2 runs with different random seeds. jmbayes is open source (GPL-3.0),
-installable with \texttt{pip install jmbayes}, and available with all benchmark scripts at
+two JMbayes2 runs with different random seeds. jmbayes covers JMbayes2's model options
+(10 marker families, competing risks, multi-state and recurrent events, interval
+censoring, all functional forms); in 21 further models on three data sets, no parameter
+was shown to differ. jmbayes is open source (GPL-3.0),
+installable with \texttt{pip install jmbayes}, and available with all scripts at
 \url{https://github.com/neuratom/jmbayes}.
 \end{abstract}
 
@@ -136,12 +139,14 @@ platform-independent wheel that runs wherever PyTorch runs.
 function by function, keeping the same update order, proposals, adaptation rules and
 priors, so that the only intended difference is the random-number stream. Much of this
 translation was done with the assistance of Claude, a large language model from
-Anthropic, which also identified the SIMD and MIMD parallelism opportunities described
-above. The author reviewed the code, and correctness was established empirically rather
+Anthropic. The author proposed recasting the chains and patients as SIMD data parallelism
+(above) and directed Claude to profile JMbayes2's code to find where this applies. The
+author reviewed the code, and correctness was established empirically rather
 than assumed from the translation: unit tests compare the design matrices, starting
 fits and priors with JMbayes2's output, and the full model was tested for statistical equivalence with JMbayes2
-(Section~\ref{sec:equiv}). Where the port revealed inconsistencies in JMbayes2's own code,
-we reproduced them in the sampler so that results stay comparable, and documented them.
+(Section~\ref{sec:equiv}). Where the port revealed apparent inconsistencies in JMbayes2's own
+code, we reproduced them where possible so that results stay comparable, and documented
+them (Section~\ref{sec:impl}).
 
 \section{Implementation}\label{sec:impl}
 
@@ -187,14 +192,38 @@ on the GPU, 32-bit was 1.67$\times$ faster than 64-bit (geometric mean; 95\% CI
 log-likelihood of 1,000 neighbouring representable values are 4 apart, too coarse for MCMC
 acceptance decisions.
 
-\paragraph{Deliberate differences.} While porting we found three places where JMbayes2's
-C++ code appears inconsistent. Two affect the sampler (a random-effects density not
-refreshed after the fixed-effects update, and a survival denominator not refreshed after
-the smoothing-parameter update); jmbayes reproduces both so that results match. The third
-affects dynamic prediction: when sampling a new patient's random effects, JMbayes2 scales
-the survival term differently from the code that then computes the risk. jmbayes uses the
-consistent version by default and reproduces JMbayes2's with
-\texttt{predict(..., r\_sampling=True)}.
+\paragraph{Possible issues in JMbayes2.} Porting code line by line, and testing every
+result against it, is a close reading, and it turned up places where JMbayes2 (0.6-5)
+appears not to do what it intends. These are our reading of the code and of the outputs
+we observed; we may have misunderstood the intent in some cases, and we are reporting them
+to the maintainers. Where results stay comparable, jmbayes reproduces the behaviour so
+that the comparisons test the port and not the fix.
+\begin{itemize}
+\item \emph{Sampler.} A random-effects density does not appear to be refreshed after the
+fixed-effects update, nor a survival denominator after the smoothing-parameter update.
+jmbayes reproduces both.
+\item \emph{Dynamic prediction.} When sampling a new patient's random effects, the survival
+term appears to be scaled differently from the code that then computes the risk. jmbayes
+uses the consistent version by default and reproduces JMbayes2's with
+\texttt{predict(..., r\_sampling=True)}; for PBC patient 93 the one-year
+risk was 0.63 instead of 0.70.
+\item \emph{Hierarchical centring with splines.} With a spline of time in a fixed-effect
+interaction (e.g.\ \texttt{ns(year, 2) * sex} with random \texttt{\textasciitilde{} ns(year, 2)}),
+the centring multiplier appears to be computed from the spline evaluated at 1 rather than
+from the random-effect column, so the fixed-effects step no longer leaves the linear
+predictors unchanged. In one test a single fixed-effect draw changed a patient's
+association term 300-fold. jmbayes corrects this (models without such terms are
+unaffected, bit for bit), and the comparisons use additive spline models.
+\item \emph{Smaller points.} \texttt{Dexpit()} appears to be read as \texttt{expit()}
+(transformation names are matched case-sensitively); \texttt{ms\_setup()} with a single
+covariate appears to place values on other patients' rows; and the separate mixed-model
+fits that \texttt{jm()} starts from and centres some priors on did not always converge
+(Student's $t$, censored normal, beta-binomial), so these comparisons start both programs
+from R's separate fits. For binomial markers with several trials and beta-binomial markers,
+JMbayes2's fit statistics looked implausible (conditional $p_D$ about half of the DIC;
+marginal DIC 0, LPML $\infty$, WAIC missing); we have not traced the cause.
+\end{itemize}
+Details and the code locations are in the repository's \texttt{NOTES.md}.
 
 \paragraph{Interface.} Models are written with Python objects
 (\texttt{Marker}, \texttt{Event}, \texttt{JointModel}) or with JMbayes2-style formula
@@ -299,10 +328,47 @@ treatment, entry was set to 20\% of follow-up, and log serum bilirubin and proth
 time were Gaussian markers; all 47 parameters were shown equivalent within $\pm 0.1$ SD
 (largest difference 0.032 SD). In the second, platelets were negative binomial, rounded
 serum bilirubin Poisson and prothrombin time Student's $t$ with 4 degrees of freedom; all
-50 parameters were shown equivalent within $\pm 0.1$ SD (largest 0.024 SD). Because
+50 parameters were shown equivalent within $\pm 0.1$ SD (largest 0.034 SD). Because
 GLMMadaptive's Student's $t$ fit did not converge and \texttt{jm()} centres some priors on
 the separate fits, both programs started from R's separate fits in the second model. MCMC
-took 1,712~s and 3,907~s in JMbayes2 and 135~s and 156~s in jmbayes.
+took 1,712~s and 3,907~s in JMbayes2 and 135~s and 173~s in jmbayes.
+
+\paragraph{Further features.} jmbayes 0.7 and 0.8 add the rest of JMbayes2's model options:
+beta, gamma, censored normal, beta-binomial and binomial (with trials) markers;
+time-varying survival covariates (counting-process rows); interval censoring; recurrent
+events with a terminal event and a frailty; competing risks combined with delayed entry and
+strata; effects per stratum; all functional forms (velocity, acceleration, area and Delta
+with time windows, transformations such as expit and Dexp, interactions with covariates,
+and time-varying associations); Weibull, piecewise-constant and natural-spline baseline
+hazards; multi-state models; case weights; ridge and horseshoe shrinkage priors; and
+marginal fit statistics. We tested each with one model, in both programs, with two seeds
+of 8 chains and 15,000 iterations, using the same equivalence test. To check data other
+than PBC, we also fitted a model to each of two other data sets that ship with JMbayes2:
+CD4 counts and death in 467 HIV patients (\texttt{aids}), and the prothrombin index and
+death in 488 patients with liver cirrhosis (\texttt{prothro}).
+
+Table~\ref{tab:ext} gives the results. No parameter in any of the 21 models was
+shown to differ between the programs. In 16 models all or nearly all parameters were shown
+equivalent within $\pm 0.2$ SD; in the other five (competing risks with delayed entry and
+strata, recurrent events, effects per stratum, the beta-binomial model and the multi-state
+model) many were inconclusive, but two runs of the same program differed about
+as much as the two programs did, which points to slow mixing at this run length rather
+than to a difference. In the beta-binomial model, for example, the random intercepts of
+the two markers correlate at 0.98, so their associations with the hazard are nearly
+confounded. On both new data sets all 22 parameters were shown equivalent within
+$\pm 0.2$ SD.
+Hazard ratios agreed closely throughout (Table~\ref{tab:hr} in the appendix). The
+comparisons also found an error in jmbayes: for markers whose density is a difference of
+large log-gamma terms (beta-binomial, negative binomial, beta and gamma), 32-bit rounding
+exceeded the signal at large dispersions, and the beta-binomial dispersion drifted
+upwards. These densities are now computed in 64-bit precision, and the affected
+comparisons were rerun. On the AIDS data, statsmodels' default optimiser stopped at a poor
+optimum of the separate linear mixed model (its REML log-likelihood 739 units below the
+maximum), which moved the priors centred on that fit; jmbayes now also tries Powell's
+method and keeps the better fit, and the results in Table~\ref{tab:ext} use this. These runs shared the machine with each other, so we do not report
+their timings; Section~\ref{sec:bench} measures speed.
+
+\input{ext_table.tex}
 
 \section{Speed and memory}\label{sec:bench}
 
@@ -380,19 +446,18 @@ took less time for 3,120 patients at 14,000 iterations than for 1,560, and its r
 made by copying one data set, which tests scaling but not new data. Equivalence was tested
 in depth on one model and data set; three further models (splines, slope and area
 associations, fixed effects without random effects) agreed in smaller tests, and
-competing risks, the new marker families, strata and delayed entry were each tested on
-one model of the same data. The speed-up
-needs an NVIDIA GPU. jmbayes does not yet cover all of JMbayes2: it supports Gaussian and
-binomial, Poisson, negative binomial and Student's $t$ markers, value, slope and area
-associations, right censoring, delayed entry, strata and competing risks, but not beta,
-gamma or censored normal markers, interval censoring, recurrent events or time-varying
-survival covariates, nor strata or delayed entry combined with competing risks, and it
-does not compute marginal fit statistics. Unsupported models stop with an error rather
-than fitting a different model.
+each later feature (marker families, strata, delayed entry, competing risks, interval
+censoring, recurrent events, functional forms, baseline hazards, multi-state models, case
+weights and shrinkage priors) was tested on one or two models, mostly of the same data.
+The speed-up needs an NVIDIA GPU. jmbayes covers JMbayes2's model options, with three
+exceptions: survival covariates that are functions of the time variable (an interaction
+in the association gives the same time-varying effects), interval censoring or recurrent
+events combined with delayed entry or competing risks, and dynamic predictions for
+recurrent-event models. These stop with an error rather than fitting a different model.
 
 \section{Availability}
 
-jmbayes 0.6.0 is available from PyPI (\texttt{pip install jmbayes}) and at
+jmbayes 0.8.0 is available from PyPI (\texttt{pip install jmbayes}) and at
 \url{https://github.com/neuratom/jmbayes} under the GPL-3.0 licence, like JMbayes2. The
 repository contains the scripts and results for every number in this paper, including the
 full equivalence report. jmbayes is an independent reimplementation and is not affiliated
@@ -472,5 +537,10 @@ A.~Gelman and D.~B. Rubin.
 \newblock \emph{Statistical Science}, 7(4):457--472, 1992.
 
 \end{thebibliography}
+
+\appendix
+\section{Hazard ratios in the further-feature tests}
+
+\input{hr_table.tex}
 
 \end{document}

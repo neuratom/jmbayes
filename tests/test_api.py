@@ -46,7 +46,7 @@ def test_helpful_errors(pbc2_data):
     with pytest.raises(NotImplementedError):
         jmb.Longitudinal("serBilir ~ year", random="~ year | id", family="inverse_gaussian")
     with pytest.raises(NotImplementedError):
-        jmb.api.parse_functional_forms("~ velocity(y)", ["y"])
+        jmb.api.parse_functional_forms("~ foo(y)", ["y"])
     assert jmb.Longitudinal("serBilir ~ year", random="~ year || id").uncorrelated
     with pytest.raises(ValueError):
         jmb.Survival("Surv(years, status) ~ sex", data=pid)    # status is not 0/1

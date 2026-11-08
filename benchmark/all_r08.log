@@ -1,0 +1,21 @@
+R f8a 123: done: MCMC 95.3s
+R f8b 123: done: MCMC 111.6s
+R f8a 456: done: MCMC 67.0s
+R f8b 456: done: MCMC 88.3s
+R f8c 123: done: MCMC 60.9s
+R tva 123: done: MCMC 60.6s
+R f8c 456: done: MCMC 63.3s
+R tva 456: done: MCMC 64.9s
+R bhw 123: done: MCMC 40.1s
+R bhw 456: done: MCMC 48.1s
+R bhp 123: done: MCMC 58.8s
+R bhn 123: done: MCMC 67.1s
+R bhp 456: done: MCMC 68.2s
+R bhn 456: done: MCMC 70.5s
+R wts 123: done: MCMC 90.9s
+R wts 456: Execution halted
+R ms 123: Execution halted
+R ms 456: done: MCMC 351.5s
+R pen 123: done: MCMC 81.7s
+R pen 456: done: MCMC 76.2s
+done

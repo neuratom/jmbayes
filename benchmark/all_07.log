@@ -1,0 +1,8 @@
+R fam2 123: done: MCMC 1704.6s
+R rec 456: done: MCMC 1928.6s
+R fam3 123: done: MCMC 1810.1s
+R fam2 456: done: MCMC 1897.7s
+R bystr 123: done: MCMC 131.8s
+R fam3 456: done: MCMC 156.0s
+R bystr 456: done: MCMC 90.6s
+all done

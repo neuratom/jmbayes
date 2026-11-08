@@ -1,0 +1,95 @@
+\begin{longtable}{llrr}
+\caption{Hazard ratios (posterior means, two seeds averaged) in JMbayes2 and jmbayes; up to 4 per model (all are in the repository).}\label{tab:hr}\\
+\toprule Model & Term & JMbayes2 & jmbayes \\ \midrule \endfirsthead
+\toprule Model & Term & JMbayes2 & jmbayes \\ \midrule \endhead
+\bottomrule \endlastfoot
+Strata + late entry & \texttt{sexfemale} & 0.811 & 0.809 \\
+ & \texttt{value(log(serBilir))} & 2.972 & 2.965 \\
+ & \texttt{value(prothrombin)} & 1.203 & 1.203 \\
+\addlinespace
+NB, Poisson, Student's $t$ & \texttt{sexfemale} & 0.909 & 0.907 \\
+ & \texttt{value(platelets)} & 0.580 & 0.584 \\
+ & \texttt{value(bili\_count)} & 3.607 & 3.603 \\
+ & \texttt{value(prothrombin)} & 1.444 & 1.448 \\
+\addlinespace
+Time-varying covariate & \texttt{sexfemale} & 0.675 & 0.676 \\
+ & \texttt{edema\_tv} & 3.248 & 3.242 \\
+ & \texttt{value(log(serBilir))} & 2.892 & 2.895 \\
+\addlinespace
+Interval censoring & \texttt{sexfemale} & 0.896 & 0.896 \\
+ & \texttt{value(log(serBilir))} & 3.521 & 3.528 \\
+\addlinespace
+Competing risks + entry + strata & \texttt{sexfemale [transplanted]} & 2.071 & 1.999 \\
+ & \texttt{sexfemale [dead]} & 0.750 & 0.755 \\
+ & \texttt{value(log(serBilir)) [transplanted]} & 3.546 & 3.464 \\
+ & \texttt{value(log(serBilir)) [dead]} & 3.100 & 3.098 \\
+\addlinespace
+Effects per stratum & \texttt{sexfemale [placebo]} & 0.777 & 0.781 \\
+ & \texttt{sexfemale [D-penicil]} & 0.865 & 0.876 \\
+ & \texttt{value(log(serBilir)) [placebo]} & 3.083 & 3.092 \\
+ & \texttt{value(log(serBilir)) [D-penicil]} & 3.407 & 3.408 \\
+\addlinespace
+Recurrent events & \texttt{group [R]} & 1.615 & 1.616 \\
+ & \texttt{group [T1]} & 1.571 & 1.566 \\
+ & \texttt{age [R]} & 1.052 & 1.052 \\
+ & \texttt{age [T1]} & 1.049 & 1.048 \\
+\addlinespace
+Gamma, beta, cens.\ normal & \texttt{sexfemale} & 0.705 & 0.707 \\
+ & \texttt{value(serBilir)} & 3.058 & 3.052 \\
+ & \texttt{value(alb\_p)} & 0.007 & 0.007 \\
+ & \texttt{value(lalk)} & 0.622 & 0.623 \\
+\addlinespace
+Binomial (trials), beta-binomial & \texttt{sexfemale} & 1.105 & 1.059 \\
+ & \texttt{value(count2)} & 0.107 & 0.128 \\
+ & \texttt{value(count3)} & 65.843 & 50.888 \\
+\addlinespace
+Velocity, area & \texttt{sexfemale} & 0.836 & 0.835 \\
+ & \texttt{value(log(serBilir))} & 1.801 & 1.985 \\
+ & \texttt{velocity(log(serBilir), eps = 0.01,\ldots} & 32.075 & 30.115 \\
+ & \texttt{area(log(serBilir), time\_window = 2)} & 1.920 & 1.744 \\
+\addlinespace
+expit, Dexp, acceleration & \texttt{sexfemale} & 0.779 & 0.774 \\
+ & \texttt{vexpit(value(log(serBilir)))} & 198.969 & 195.992 \\
+ & \texttt{acceleration(log(serBilir))} & 31.266 & 33.295 \\
+ & \texttt{vexp(value(log(serBilir))):slope(lo\ldots} & 1.330 & 1.331 \\
+\addlinespace
+Value by sex, Delta & \texttt{sexfemale} & 0.549 & 0.544 \\
+ & \texttt{Delta(log(serBilir), time\_window = 3)} & 10.120 & 9.674 \\
+ & \texttt{value(log(serBilir)):sexmale} & 2.735 & 2.738 \\
+ & \texttt{value(log(serBilir)):sexfemale} & 3.389 & 3.404 \\
+\addlinespace
+Time-varying association & \texttt{sexfemale} & 0.862 & 0.863 \\
+ & \texttt{value(log(serBilir))} & 4.020 & 4.022 \\
+ & \texttt{value(log(serBilir)):ns(year, knots\ldots} & 0.799 & 0.800 \\
+ & \texttt{value(log(serBilir)):ns(year, knots\ldots} & 0.824 & 0.827 \\
+\addlinespace
+Weibull baseline & \texttt{sexfemale} & 0.831 & 0.832 \\
+ & \texttt{value(log(serBilir))} & 3.423 & 3.419 \\
+\addlinespace
+Piecewise-constant baseline & \texttt{sexfemale} & 0.852 & 0.852 \\
+ & \texttt{value(log(serBilir))} & 3.485 & 3.484 \\
+\addlinespace
+Natural-spline baseline & \texttt{sexfemale} & 0.880 & 0.873 \\
+ & \texttt{value(log(serBilir))} & 3.392 & 3.387 \\
+\addlinespace
+Multi-state & \texttt{X [1]} & 1.563 & 1.563 \\
+ & \texttt{X [2]} & 0.784 & 0.784 \\
+ & \texttt{X [3]} & 1.770 & 1.770 \\
+ & \texttt{value(y) [1]} & 1.704 & 1.704 \\
+\addlinespace
+Case weights & \texttt{sexfemale} & 0.853 & 0.854 \\
+ & \texttt{value(log(serBilir))} & 3.484 & 3.485 \\
+\addlinespace
+Shrinkage priors & \texttt{sexfemale} & 1.041 & 1.038 \\
+ & \texttt{age} & 1.039 & 1.039 \\
+ & \texttt{drugD-penicil} & 0.954 & 0.950 \\
+ & \texttt{value(log(serBilir))} & 1.423 & 1.452 \\
+\addlinespace
+AIDS data & \texttt{drugddI} & 1.386 & 1.386 \\
+ & \texttt{prevOIAIDS} & 2.060 & 2.065 \\
+ & \texttt{value(CD4)} & 0.780 & 0.781 \\
+\addlinespace
+Prothrombin data & \texttt{treatprednisone} & 0.825 & 0.825 \\
+ & \texttt{value(pro)} & 0.959 & 0.959 \\
+\addlinespace
+\end{longtable}

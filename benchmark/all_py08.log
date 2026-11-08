@@ -1,0 +1,15 @@
+PY tva 123: done: MCMC 44.9s
+PY tva 456: done: MCMC 48.3s
+PY bhw 123: done: MCMC 24.2s
+PY bhw 456: done: MCMC 23.8s
+PY bhp 123: done: MCMC 33.2s
+PY bhp 456: done: MCMC 33.1s
+PY bhn 123: done: MCMC 34.3s
+PY bhn 456: done: MCMC 34.3s
+PY ms 123: done: MCMC 45.6s
+PY ms 456: done: MCMC 108.0s
+PY wts 123: done: MCMC 73.5s
+PY wts 456: done: MCMC 76.2s
+PY pen 123: done: MCMC 61.3s
+PY pen 456: done: MCMC 60.3s
+done

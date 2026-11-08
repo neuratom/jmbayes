@@ -38,7 +38,7 @@ def test_python_interface_errors(pbc2_data):
     with pytest.raises(NotImplementedError):
         jmb.Marker("serBilir", family="inverse_gaussian")
     with pytest.raises(NotImplementedError):
-        jmb.Marker("serBilir", association="velocity")
+        jmb.Marker("serBilir", association="foo")
     with pytest.raises(TypeError):
         jmb.Marker(var("serBilir"))           # a term, not a response
     with pytest.raises(ValueError, match="16-bit"):

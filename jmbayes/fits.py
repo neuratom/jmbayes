@@ -35,14 +35,27 @@ def fit_lme(y, X, Z, groups, diagonal=False) -> MixedFit:
     model = sm.MixedLM(y, X, groups=groups, exog_re=Z)
     free = (MixedLMParams.from_components(np.ones(X.shape[1]), cov_re=np.eye(Z.shape[1]))
             if diagonal else None)
+    # statsmodels' optimisers can report convergence at a poor local optimum (on the aids
+    # data L-BFGS stopped 739 REML log-likelihood units below the maximum, with a random
+    # slope variance 280 times too large), so try several and keep the best. The first
+    # (L-BFGS) is kept unless another is clearly better, so results where it already
+    # reaches the maximum are unchanged. Powell and Nelder-Mead ignore `free` (the zero
+    # covariances of a diagonal D), so with diagonal=True only the gradient methods are
+    # used, and the first that converges is kept.
     res = None
-    for method in ("lbfgs", "bfgs", "powell"):
+    methods = ("lbfgs", "bfgs") if diagonal else ("lbfgs", "powell", "nm", "bfgs")
+    for method in methods:
+        if res is not None and res.converged and (diagonal or method in ("nm", "bfgs")):
+            break                              # fallbacks only if nothing converged
         try:
-            res = model.fit(reml=True, method=method, free=free)
-            if res.converged:
-                break
+            r = model.fit(reml=True, method=method, free=free,
+                          **({"maxiter": 5000} if method in ("powell", "nm") else {}))
         except Exception:  # noqa: BLE001 - try the next optimiser
             continue
+        if not np.isfinite(r.llf):
+            continue
+        if res is None or (r.converged and (not res.converged or r.llf > res.llf + 0.01)):
+            res = r
     if res is None:
         raise RuntimeError("lme fit failed")
     p = X.shape[1]
@@ -228,12 +241,13 @@ def _num_hessian(f, x, h=1e-4):
 # Cox model, Efron ties
 # ---------------------------------------------------------------------------
 
-def fit_coxph(time, event, W, strata=None, start=None) -> np.ndarray:
+def fit_coxph(time, event, W, strata=None, start=None, weights=None) -> np.ndarray:
     """Cox model by Newton-Raphson with Efron ties. strata: optional stratum of each row;
     risk sets are then formed within strata, as with coxph(... + strata()). start:
     optional entry times (delayed entry, Surv(start, stop, event)): a patient is at risk
     at t only when start < t <= time."""
     beta = np.zeros(W.shape[1])
+    wt = np.ones(len(time)) if weights is None else np.asarray(weights, float)
     if strata is None:
         strata = np.zeros(len(time), int)
     if start is None:
@@ -242,23 +256,24 @@ def fit_coxph(time, event, W, strata=None, start=None) -> np.ndarray:
     for _ in range(50):
         grad = np.zeros_like(beta)
         hess = np.zeros((len(beta), len(beta)))
-        r = np.exp(W @ beta)
+        r = wt * np.exp(W @ beta)              # weighted risk scores (coxfit6)
         for k, t in ((k, t) for k, ts in groups for t in ts):
             risk = (time >= t) & (start < t) & (strata == k)
             dead = (time == t) & (event == 1) & (strata == k)
             d = dead.sum()
+            meanwt = wt[dead].sum() / d
             s0r, s1r = r[risk].sum(), (r[risk, None] * W[risk]).sum(0)
             s2r = (r[risk, None, None] * W[risk, :, None] * W[risk, None, :]).sum(0)
             s0d, s1d = r[dead].sum(), (r[dead, None] * W[dead]).sum(0)
             s2d = (r[dead, None, None] * W[dead, :, None] * W[dead, None, :]).sum(0)
-            grad += W[dead].sum(0)
+            grad += (wt[dead, None] * W[dead]).sum(0)
             for l in range(d):
                 frac = l / d
                 s0 = s0r - frac * s0d
                 s1 = s1r - frac * s1d
                 s2 = s2r - frac * s2d
-                grad -= s1 / s0
-                hess -= s2 / s0 - np.outer(s1, s1) / s0 ** 2
+                grad -= meanwt * s1 / s0
+                hess -= meanwt * (s2 / s0 - np.outer(s1, s1) / s0 ** 2)
         step = np.linalg.solve(hess, grad)
         beta = beta - step
         if np.abs(step).max() < 1e-10:

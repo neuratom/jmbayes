@@ -38,6 +38,8 @@ def model_and_data(which):
                    jmb.Marker("bili_count", fixed=year + sex, random=year, family="poisson"),
                    jmb.Marker("prothrombin", fixed=year * sex, random=year,
                               family="student_t", df=4)]
+    elif which in ("aids", "prothro"):
+        return _model_other(which)
     else:
         return _model_07(which, year, sex)
     return jmb.JointModel(event, markers, id="id", time="year"), visits, patients
@@ -86,6 +88,8 @@ def _model_07(which, year, sex):
     elif which == "bystr":
         event = jmb.Event("years", "status2", sex, strata="drug", by_strata=True)
         markers = [lbili, jmb.Marker("prothrombin", fixed=year * sex, random=year)]
+    elif which in MODELS_08:
+        return _model_08(which, year, sex)
     else:
         raise SystemExit(f"unknown model {which!r}")
     v0, _ = jmb.datasets.pbc2()
@@ -94,6 +98,89 @@ def _model_07(which, year, sex):
             if col in df and col in v0 and hasattr(v0[col], "cat") and                     not pd.api.types.is_numeric_dtype(df[col]):
                 df[col] = pd.Categorical(df[col].astype(str),
                                          categories=list(v0[col].cat.categories))
+    return jmb.JointModel(event, markers, id="id", time=time), visits, patients
+
+
+def _model_other(which):
+    """Data other than PBC (make_other_data.R; same models in run_ext3_R.R)."""
+    import pandas as pd
+    from pathlib import Path
+    d = Path(__file__).parent / "data_ext"
+    lv = pd.read_csv(d / f"{which}_long.csv")
+    sv = pd.read_csv(d / f"{which}_surv.csv")
+    levels = dict(drug=["ddC", "ddI"], prevOI=["noAIDS", "AIDS"],
+                  treat=["placebo", "prednisone"])
+    for df in (lv, sv):
+        for c, lev in levels.items():
+            if c in df:
+                df[c] = pd.Categorical(df[c], categories=lev)
+    if which == "aids":
+        t = var("obstime")
+        event = jmb.Event("Time", "death", var("drug") + var("prevOI"))
+        marker = jmb.Marker("CD4", fixed=t + (t & var("drug")), random=t)
+        return jmb.JointModel(event, marker, id="patient", time="obstime"), lv, sv
+    t = var("time")
+    event = jmb.Event("Time", "death", var("treat"))
+    marker = jmb.Marker("pro", fixed=t * var("treat"), random=t)
+    return jmb.JointModel(event, marker, id="id", time="time"), lv, sv
+
+
+MODELS_08 = ("f8a", "f8b", "f8c", "tva", "bhw", "bhp", "bhn", "ms", "wts", "pen")
+# fit() options per 0.8 model (as jm() arguments in run_ext3_R.R)
+FIT_08 = dict(bhw=dict(base_hazard="Weibull"), bhp=dict(base_hazard="piecewise constant"),
+              bhn=dict(base_hazard="natural cubic spline"),
+              ms=dict(base_hazard="Weibull"),
+              pen=dict(penalty_alphas="horseshoe", penalty_gammas="ridge"))
+
+
+def _model_08(which, year, sex):
+    """0.8 models (functional forms, time-varying association, baseline hazards,
+    multi-state, weights, shrinkage priors); see run_ext3_R.R."""
+    import pandas as pd
+    from pathlib import Path
+    from jmbayes import assoc as A
+    from jmbayes import ns
+    d = Path(__file__).parent / "data_ext"
+    visits, patients = jmb.datasets.pbc2()
+    patients = patients.copy()
+    time = "year"
+    resp = var("serBilir").log()
+    ff = lambda txt: A.parse(txt, ["log(serBilir)"])["log(serBilir)"]  # noqa: E731
+    spl = dict(fixed=ns(year, 2) + sex, random=ns(year, 2))   # (see NOTES: HC + splines)
+    lin = dict(fixed=year * sex, random=year)
+    event = jmb.Event("years", "status2", sex)
+    if which == "f8a":
+        markers = [jmb.Marker(resp, **spl, association=ff(
+            "~ value(log(serBilir)) + velocity(log(serBilir), eps = 0.01, direction = "
+            "'backward') + area(log(serBilir), time_window = 2)"))]
+    elif which == "f8b":
+        markers = [jmb.Marker(resp, **spl, association=ff(
+            "~ vexpit(value(log(serBilir))) + Dexp(slope(log(serBilir))) + "
+            "acceleration(log(serBilir))"))]
+    elif which == "f8c":
+        markers = [jmb.Marker(resp, **spl, association=ff(
+            "~ value(log(serBilir)):sex + Delta(log(serBilir), time_window = 3)"))]
+    elif which == "tva":
+        markers = [jmb.Marker(resp, **lin, association=ff(
+            "~ value(log(serBilir)) * ns(year, k = c(3, 6, 9), B = c(0, 14.5))"))]
+    elif which in ("bhw", "bhp", "bhn"):
+        markers = [jmb.Marker(resp, **lin)]
+    elif which == "wts":
+        patients["w"] = (patients["sex"] == "female").astype(float) + 1.0
+        event = jmb.Event("years", "status2", sex, weights="w")
+        markers = [jmb.Marker(resp, **lin)]
+    elif which == "pen":
+        event = jmb.Event("years", "status2", sex + var("age") + var("drug"))
+        markers = [jmb.Marker(resp, **lin, association=["value", "slope", "area"]),
+                   jmb.Marker("prothrombin", fixed=year * sex, random=year)]
+    elif which == "ms":
+        visits = pd.read_csv(d / "ms_long.csv")
+        patients = pd.read_csv(d / "ms_surv.csv")
+        t = var("time")
+        event = jmb.Event("Tstop", "status", var("X"), start="Tstart", strata="transition",
+                          by_strata=True)
+        markers = [jmb.Marker("y", fixed=t, random=t)]
+        time = "time"
     return jmb.JointModel(event, markers, id="id", time=time), visits, patients
 
 
@@ -116,7 +203,7 @@ def main():
             init = json.load(f)
     fit = model.fit(visits, patients, n_iter=a.n_iter, n_burnin=a.n_burnin, n_thin=1,
                     n_chains=a.n_chains, seed=a.seed, dtype=a.dtype, verbose=False,
-                    initial_fits=init)
+                    initial_fits=init, **FIT_08.get(a.model, {}))
     res = {k: sm.table(*v) for k, v in fit.blocks.items()}
     res["fit_stats"] = {k: float(v) for k, v in fit.fit_statistics.items()}
     if fit.marginal_fit_statistics:

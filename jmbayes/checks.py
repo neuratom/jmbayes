@@ -59,9 +59,10 @@ def check_patients(patients: pd.DataFrame, id_var: str, time: str, event: str,
                         f"{int((t <= 0).sum())} rows are <= 0")
     if start and len(dup) and not recurrent:
         # counting-process rows of one patient must not overlap
-        d = patients[[id_var, start, time]].astype({start: float, time: float})
-        d = d.sort_values([id_var, start], kind="mergesort")
-        prev = d.groupby(id_var)[time].shift()
+        keys = [id_var] + ([strata] if strata else [])     # within a stratum
+        d = patients[keys + [start, time]].astype({start: float, time: float})
+        d = d.sort_values(keys + [start], kind="mergesort")
+        prev = d.groupby(keys, observed=True)[time].shift()
         if (d[start] < prev - 1e-12).any():
             raise DataError(f"{what}: the intervals ({start}, {time}] of a patient "
                             "overlap; each row should cover the next stretch of follow-up")

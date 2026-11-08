@@ -10,6 +10,7 @@ for m in $MODELS; do
   init=""
   [ -f benchmark/R_${m}_initfits.json ] && init="--initial-fits benchmark/R_${m}_initfits.json"
   for s in 123 456; do
+    [ -f benchmark/PY_${m}_seed$s.json ] && continue
     $PY benchmark/run_ext.py $m benchmark/PY_${m}_seed$s.json --seed $s $init \
       > benchmark/ext2_PY_${m}$s.log 2>&1
     echo "PY $m $s: $(tail -1 benchmark/ext2_PY_${m}$s.log)"
@@ -18,6 +19,7 @@ done
 lane() {
   for m in "$@"; do
     for s in 123 456; do
+      [ -f benchmark/R_${m}_seed$s.json ] && continue
       "$RS" benchmark/run_ext2_R.R $m benchmark/R_${m}_seed$s.json 15000 2500 8 $s \
         > benchmark/ext2_R_${m}$s.log 2>&1
       echo "R $m $s: $(tail -1 benchmark/ext2_R_${m}$s.log)"

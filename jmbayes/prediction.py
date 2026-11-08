@@ -22,8 +22,9 @@ import pandas as pd
 import torch
 
 from jmbayes import families as fam
-from jmbayes.model import (GK_SK, GK_WK, TimeDesigner, _bspline_basis,
-                              fill_within_subject)
+from jmbayes.assoc import torch_transform
+from jmbayes.model import (BASE_HAZARD, GK_SK, GK_WK, TimeDesigner, baseline_basis,
+                           by_columns, fill_within_subject, outcome_slots)
 
 LOG2PI = math.log(2 * math.pi)
 # gaussKronrod(7) in help_functions.R: the 7-point Gauss rule (competing-risk CIFs)
@@ -156,6 +157,9 @@ class _NewData:
         self.log_Pwk = np.log(P)[..., None] + np.log(GK_WK)
         deg = meta["Bsplines_degree"]
         self.deg = deg
+        bh = meta.get("base_hazard") or dict(BASE_HAZARD, degree=deg)
+        basis = lambda x, kn: baseline_basis(x, kn, bh)  # noqa: E731
+        nbk = lambda kn: basis(np.array([1.0]), kn).shape[1]  # noqa: E731
         # the user's strata of each patient (index into user_strata_levels)
         ulev = getattr(md, "user_strata_levels", None)
         if ulev is None and md.causes is None and md.strata_levels is not None:
@@ -174,18 +178,18 @@ class _NewData:
         self.knots_strata = md.knots_strata or [md.knots]
         if md.causes is None and md.strata_levels is not None:
             # strata: each patient's spline block, with that stratum's knots
-            nb0 = len(self.knots_strata[0]) - deg - 1
+            nb0 = nbk(self.knots_strata[0])
             self.W0 = np.zeros((self.n, self.m, 15, nb0 * len(md.strata_levels)))
             for i, k in enumerate(self.k_user):
-                self.W0[i, ..., k * nb0:(k + 1) * nb0] = _bspline_basis(
-                    nodes[i].ravel(), self.knots_strata[k], deg).reshape(self.m, 15, -1)
+                self.W0[i, ..., k * nb0:(k + 1) * nb0] = basis(
+                    nodes[i].ravel(), self.knots_strata[k]).reshape(self.m, 15, -1)
         else:
-            self.W0 = _bspline_basis(nodes.ravel(), md.knots, deg).reshape(self.n, self.m,
-                                                                            15, -1)
+            self.W0 = basis(nodes.ravel(), md.knots).reshape(self.n, self.m, 15, -1)
         W_raw = sv["covariates"].without_intercept().build(last, dict(meta["surv_levels"]))[0]
         glev = getattr(md, "group_levels", None)
         designer = TimeDesigner(fill_within_subject(d), time_var)
         self.designer = designer
+        self.time_var = time_var
         self.d = d
         self.cr = md.causes is not None
         if not self.cr:
@@ -196,15 +200,8 @@ class _NewData:
                     Wg[np.arange(self.n), j * G + self.k_user] = W_raw[:, j]
                 W_raw = Wg
             self.W = (W_raw - md.W_bar) / md.W_sds               # (n, P)
-            Tn = nodes.reshape(self.n, -1)
-            self.assoc = []
-            for j, o in enumerate(md.outcomes):
-                for a in o.assoc:
-                    Xa = designer.design(a["form"], o.fixed, o.levels, Tn, "nodes", o.Xbar)
-                    Za = designer.design(a["form"], o.random, o.levels, Tn, "nodes")
-                    u = (None if "cause" not in a else
-                         (self.k_user == glev.index(a["cause"])).astype(float))
-                    self.assoc.append(dict(j=j, X=Xa, Z=Za, u=u))
+            self._columns(md, last, glev, None)
+            self.sets = {"H": self._set(md, last, nodes, "H")}
             return
         # competing risks: covariates of each cause's row, standardised as in the fit
         causes = md.causes
@@ -225,6 +222,7 @@ class _NewData:
         nodes_s = Ps[..., None] * GK_SK + ((s7 + s0[..., None]) / 2.0)[..., None]
         with np.errstate(divide="ignore"):
             self.log_Pwk_s = np.log(Ps)[..., None] + np.log(GK_WK)
+        self._columns(md, last, None, causes)
         self.sets = {}
         for key, pts in (("H", nodes), ("h7", s7), ("H7", nodes_s)):
             Tn = pts.reshape(self.n, -1)
@@ -232,24 +230,61 @@ class _NewData:
             B = []
             for k in range(Kc):
                 Bk = np.zeros((self.n, int(np.prod(pts.shape[1:])),
-                               len(self.knots_strata[0]) - deg - 1))
+                               nbk(self.knots_strata[0])))
                 for u in np.unique(self.k_user):
                     rows = self.k_user == u
-                    Bk[rows] = _bspline_basis(Tn[rows].ravel(),
-                                              self.knots_strata[k * self.n_user + u],
-                                              deg).reshape(rows.sum(), Tn.shape[1], -1)
+                    Bk[rows] = basis(Tn[rows].ravel(),
+                                     self.knots_strata[k * self.n_user + u]).reshape(
+                                         rows.sum(), Tn.shape[1], -1)
                 B.append(Bk.reshape(*pts.shape, -1))
-            des = {}
-            for j, o in enumerate(md.outcomes):
-                for form in dict.fromkeys(a["form"] for a in o.assoc):
-                    des[(j, form)] = (
-                        designer.design(form, o.fixed, o.levels, Tn, f"cr_{key}", o.Xbar),
-                        designer.design(form, o.random, o.levels, Tn, f"cr_{key}"))
-            self.sets[key] = dict(B=B, shape=pts.shape[1:], des=des)
+            self.sets[key] = dict(self._set(md, last, pts, f"cr_{key}"), B=B)
         # each patient's strata blocks of bs_gammas, per cause
         self.bs_block = [k * self.n_user + self.k_user for k in range(Kc)]
-        self.assoc = [dict(j=j, form=a["form"], cause=causes.index(a["cause"]))
-                      for j, o in enumerate(md.outcomes) for a in o.assoc]
+
+    def _columns(self, md, last, glev, causes):
+        """Association columns: global slot factors, cause (competing risks) and group
+        mask (by_strata)."""
+        self.slot_j, self.cols = [], []
+        for j, o in enumerate(md.outcomes):
+            sl, cols = outcome_slots(o)
+            off = len(self.slot_j)
+            self.slot_j += [j] * len(sl)
+            for a in cols:
+                g = None
+                if glev is not None and "cause" in a:
+                    g = (self.k_user == glev.index(a["cause"])).astype(float)
+                self.cols.append(dict(j=j, factors=[(off + k, t) for k, t in a["factors"]],
+                                      cause=(causes.index(a["cause"]) if causes is not None
+                                             else None),
+                                      g=g, by=a.get("by"), by_levels=o.by_levels))
+
+    def _set(self, md, last, pts, name):
+        """Slot designs and interaction columns at points pts (n, *shape)."""
+        n, shape = self.n, pts.shape[1:]
+        Tn = pts.reshape(n, -1)
+        des = []
+        for j, o in enumerate(md.outcomes):
+            for sl in outcome_slots(o)[0]:
+                f = sl["form"]
+                T = Tn if f.ie_time is None else np.minimum(
+                    Tn, last[f.ie_time].astype(float).to_numpy()[:, None])
+                des.append((self.designer.design(f, o.fixed, o.levels, T, None, name, o.Xbar,
+                                                 f.zero_ind_X),
+                            self.designer.design(f, o.random, o.levels, T, None, name, None,
+                                                 f.zero_ind_Z)))
+        U = []
+        frame = None
+        for c in self.cols:
+            if c["by"] is None:
+                U.append(None)
+                continue
+            if frame is None:
+                frame = last.iloc[np.repeat(np.arange(n), Tn.shape[1])].reset_index(drop=True)
+                frame[self.time_var] = Tn.ravel()
+            by, full, idx = c["by"]
+            U.append(by_columns(by, frame, dict(c["by_levels"]), full)[1][:, idx]
+                     .reshape(n, *shape))
+        return dict(shape=shape, des=des, U=U)
 
 
 # ------------------------------------------------------------------ the engine
@@ -279,13 +314,14 @@ class _Engine:
             self.nb = self.th["bs"].shape[1] // md.n_strata
             self.bs_block = [torch.as_tensor(k_, device=self.dev) for k_ in nd.bs_block]
             self.Wg = [(t(W) @ self.th["gammas"].T).T for W in nd.Wc]    # (S, n) per cause
-            self.sets = {k: dict(B=[t(B) for B in v["B"]], shape=v["shape"],
-                                 des={jf: (t(X), t(Z)) for jf, (X, Z) in v["des"].items()})
-                         for k, v in nd.sets.items()}
+        self.sets = {k: dict(B=[t(B) for B in v["B"]] if "B" in v else None,
+                             shape=v["shape"], des=[(t(X), t(Z)) for X, Z in v["des"]],
+                             U=[None if u is None else t(u) for u in v["U"]])
+                     for k, v in nd.sets.items()}
+        self.cols = [dict(c, g=None if c["g"] is None else t(c["g"])) for c in nd.cols]
+        if self.cr:
             self.log_Pwk = t(nd.log_Pwk)
             return
-        self.assoc = [dict(j=a["j"], X=t(a["X"]), Z=t(a["Z"]),
-                           u=None if a["u"] is None else t(a["u"])) for a in nd.assoc]
         n, m = nd.n, nd.m
         # baseline part of the log hazard at every node: log P w + W0 bs + W gamma
         base = (t(nd.log_Pwk)[None] + torch.einsum("nmkb,sb->snmk", t(nd.W0), self.th["bs"])
@@ -321,18 +357,30 @@ class _Engine:
         if r_sampling:
             shift = (self.th["gammas"] * self.t(self.md.W_bar / self.md.W_sds)).sum(-1)
             lam = lam + shift[:, None, None, None]
-        for c, a in enumerate(self.assoc):
-            j = a["j"]
-            X = a["X"].view(n, m, 15, -1)[:, cols]
-            Z = a["Z"].view(n, m, 15, -1)[:, cols]
-            eta = (torch.einsum("nmkp,sp->snmk", X, self.th["betas"][:, self.fe[j]])
-                   + torch.einsum("nmkr,snr->snmk", Z, b[:, :, self.re[j]]))
-            if a["u"] is not None:        # group-specific column (by_strata)
-                eta = eta * a["u"][None, :, None, None]
-            w = (eta - self.Wbar[c]) * self.Wisd[c]
+        etas = self._etas(b, "H", cols)
+        for c in range(len(self.cols)):
+            w = self._col(c, etas, "H", cols)
             a_c = self.th["alphas"][:, c] * (self.Wisd[c] if r_sampling else 1.0)
             lam = lam + a_c[:, None, None, None] * w
         return torch.exp(lam).sum(-1)                            # (S, n, m')
+
+    def _col(self, c, etas, key, sl=None, cause=None):
+        """Standardised association column c at the points of set `key`; for competing
+        risks zero (before standardising) unless the column belongs to `cause`."""
+        a = self.cols[c]
+        w = None
+        for k, tf in a["factors"]:
+            v = torch_transform(tf, etas[k])
+            w = v if w is None else w * v
+        U = self.sets[key]["U"][c]
+        if U is not None:
+            U = U if sl is None else U[:, sl]
+            w = w * U[None]
+        if a["g"] is not None:
+            w = w * a["g"].reshape(1, -1, *([1] * (w.dim() - 2)))
+        if cause is not None and a["cause"] != cause:
+            w = 0.0 * w
+        return (w - self.Wbar[c]) * self.Wisd[c]
 
     # ---- competing risks: cause-specific log hazards at a set of time points
     def _etas(self, b, key, sl=None):
@@ -340,13 +388,14 @@ class _Engine:
         points of set `key` (optionally only the grid columns sl), (S, n, *shape)."""
         st, n = self.sets[key], self.nd.n
         out = {}
-        for (j, form), (X, Z) in st["des"].items():
+        for k, (X, Z) in enumerate(st["des"]):
+            j = self.nd.slot_j[k]
             Xv = X.view(n, *st["shape"], -1)
             Zv = Z.view(n, *st["shape"], -1)
             if sl is not None:
                 Xv, Zv = Xv[:, sl], Zv[:, sl]
-            out[(j, form)] = (torch.einsum("n...p,sp->sn...", Xv, self.th["betas"][:, self.fe[j]])
-                              + torch.einsum("n...r,snr->sn...", Zv, b[:, :, self.re[j]]))
+            out[k] = (torch.einsum("n...p,sp->sn...", Xv, self.th["betas"][:, self.fe[j]])
+                      + torch.einsum("n...r,snr->sn...", Zv, b[:, :, self.re[j]]))
         return out
 
     def _loghaz(self, etas, key, k, sl=None):
@@ -357,9 +406,8 @@ class _Engine:
         bs_k = self.th["bs"].view(self.S, -1, self.nb)[:, self.bs_block[k]]
         lam = torch.einsum("n...b,snb->sn...", B, bs_k)
         lam = lam + self.Wg[k].reshape(*self.Wg[k].shape, *([1] * (lam.dim() - 2)))
-        for c, a in enumerate(self.nd.assoc):
-            eta = etas[(a["j"], a["form"])]
-            w = ((eta if a["cause"] == k else 0.0 * eta) - self.Wbar[c]) * self.Wisd[c]
+        for c in range(len(self.cols)):
+            w = self._col(c, etas, key, sl, cause=k)
             lam = lam + self.th["alphas"][:, c].reshape(-1, *([1] * (w.dim() - 1))) * w
         return lam
 

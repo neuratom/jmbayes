@@ -1,0 +1,5 @@
+Warning message:
+In GLMMadaptive::mixed_model(fixed = cbind(lalk, lalk_cens) ~ year +  :
+  Hessian matrix at convergence is not positive definite; unstable solution.
+
+done: MCMC 1704.6s
