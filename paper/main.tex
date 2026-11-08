@@ -20,11 +20,11 @@ Bayesian joint models for longitudinal and time-to-event data}
 We present \textbf{jmbayes}, a data-parallel reimplementation of the R package JMbayes2,
 a widely used tool for Bayesian joint models of longitudinal and time-to-event data. It
 fits the same model, with the same priors and the same Markov chain Monte Carlo (MCMC)
-algorithm, and gives statistically equivalent results, but runs up to 10.5$\times$ faster
-with up to 27$\times$ less memory. For 3,120 patients and 90,000 iterations, JMbayes2 took
+algorithm, and gives statistically equivalent results. On the largest problem we tested it was
+10$\times$ faster with 27$\times$ less memory, and the gap grew with problem size. For 3,120 patients and 90,000 iterations, JMbayes2 took
 104 minutes and 37.8~GB of RAM; jmbayes took 11 minutes and 1.4~GB. The speed-up grows with
 the problem: 3.3$\times$ on 312 patients, 8--9$\times$ on 1,560--3,120 patients at
-JMbayes2's default run length, and 9.7--10.5$\times$ on long runs with 3,120 patients. jmbayes's memory stayed at
+JMbayes2's default run length, and 9.7--10.5$\times$ on long runs with 3,120 patients, still growing at the largest size tested. jmbayes's memory stayed at
 1.3--1.4~GB of RAM and under 0.2~GB of GPU memory in every run, up to 90,000 iterations,
 while JMbayes2's grew with patients $\times$ iterations beyond the capacity of a typical
 workstation. The gains come from restructuring the computation, not from changing the
@@ -56,8 +56,9 @@ thousand patients no longer fit in the memory of a typical 16~GB workstation.
 
 jmbayes removes both limits without changing the statistical method. It is a port of
 JMbayes2's sampler, step by step, to PyTorch \cite{pytorch}, restructured so that the work
-of each iteration runs as data-parallel operations. On the same machine, it was up to
-10.5$\times$ faster than JMbayes2, an order of magnitude on long runs with large cohorts,
+of each iteration runs as data-parallel operations. On the same machine, it was
+10$\times$ faster than JMbayes2 on the largest problems we tested, with a gap that grew with
+cohort size and run length,
 and its memory barely grew with run length. We show with formal equivalence tests that
 it gives the same results as JMbayes2 within Monte Carlo error.
 

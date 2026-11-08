@@ -1,7 +1,8 @@
 # `jmbayes`: JMBayes2 Accelerated Python Implementation
 
 Bayesian joint models for longitudinal and time-to-event data, in Python on the GPU.
-**Up to 10× faster than JMbayes2, with up to 27× less memory, and the same results.**
+**10× faster than JMbayes2 with 27× less memory on the largest problem we tested, and the
+same results. The gap grows with problem size.**
 
 |  | JMbayes2 | jmbayes |
 |---|---:|---:|
@@ -17,8 +18,7 @@ Miranda Afonso: the same model, the same priors and the same MCMC algorithm.
   it needs 12 GB at 28,000 iterations and 38 GB at 90,000, more than most machines have.
 * **The bigger the problem, the bigger the gap.** 3.3× faster than JMbayes2 on 312
   patients, 8–9× on 1,560–3,120 patients at JMbayes2's default run length, and 10× on
-  long runs. With ten times the
-  patients, jmbayes takes 1.4× longer and JMbayes2 3.7× longer
+  long runs, still growing at the largest size we tested. With ten times the patients, jmbayes takes 1.4× longer and JMbayes2 3.7× longer
   (see [Benchmarks](#benchmarks)).
 * **The same answers, formally tested.** In equivalence tests against JMbayes2, all 50
   model parameters agree within 0.2 posterior SD and every regression coefficient leads
