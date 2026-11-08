@@ -28,8 +28,19 @@ def _missing_report(df: pd.DataFrame, cols, what: str):
                         "impute; remove or fill these before fitting.")
 
 
+def event_causes(col: pd.Series, censored):
+    """Competing risks: the causes, in the column's category order (else sorted), without
+    the censoring value. None for a 0/1 event."""
+    if censored is None:
+        return None
+    levels = (list(col.cat.categories) if isinstance(col.dtype, pd.CategoricalDtype)
+              else sorted(pd.unique(col.astype(str))))
+    present = set(col.astype(str))
+    return [str(v) for v in levels if str(v) != str(censored) and str(v) in present]
+
+
 def check_patients(patients: pd.DataFrame, id_var: str, time: str, event: str,
-                   covariates, what="patients data"):
+                   covariates, what="patients data", censored=None):
     _missing_report(patients, [id_var, time, event, *covariates], what)
     dup = patients[id_var][patients[id_var].duplicated()]
     if len(dup):
@@ -39,9 +50,19 @@ def check_patients(patients: pd.DataFrame, id_var: str, time: str, event: str,
     if (t <= 0).any():
         raise DataError(f"{what}: follow-up time '{time}' must be positive; "
                         f"{int((t <= 0).sum())} rows are <= 0")
+    if censored is not None:
+        vals = set(patients[event].astype(str))
+        if str(censored) not in vals and len(vals) < 2:
+            raise DataError(f"{what}: event column '{event}' has no value '{censored}'")
+        if len(event_causes(patients[event], censored)) < 2:
+            raise DataError(f"{what}: competing risks need at least two causes in "
+                            f"'{event}' besides '{censored}'; for a single event, code "
+                            "it 0/1 and leave out censored=")
+        return
     if not set(pd.unique(patients[event])) <= {0, 1}:
         raise DataError(f"{what}: event column '{event}' must be coded 0/1 "
-                        "(e.g. create it with (df.status != 'alive').astype(int))")
+                        "(e.g. create it with (df.status != 'alive').astype(int)), or "
+                        "name the causes and pass censored= for competing risks")
 
 
 def check_visits(visits: pd.DataFrame, id_var: str, time_var: str, markers,

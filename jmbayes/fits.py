@@ -171,16 +171,20 @@ def _num_hessian(f, x, h=1e-4):
 # Cox model, Efron ties
 # ---------------------------------------------------------------------------
 
-def fit_coxph(time, event, W) -> np.ndarray:
+def fit_coxph(time, event, W, strata=None) -> np.ndarray:
+    """Cox model by Newton-Raphson with Efron ties. strata: optional stratum of each row;
+    risk sets are then formed within strata, as with coxph(... + strata())."""
     beta = np.zeros(W.shape[1])
-    event_times = np.unique(time[event == 1])
+    if strata is None:
+        strata = np.zeros(len(time), int)
+    groups = [(k, np.unique(time[(event == 1) & (strata == k)])) for k in np.unique(strata)]
     for _ in range(50):
         grad = np.zeros_like(beta)
         hess = np.zeros((len(beta), len(beta)))
         r = np.exp(W @ beta)
-        for t in event_times:
-            risk = time >= t
-            dead = (time == t) & (event == 1)
+        for k, t in ((k, t) for k, ts in groups for t in ts):
+            risk = (time >= t) & (strata == k)
+            dead = (time == t) & (event == 1) & (strata == k)
             d = dead.sum()
             s0r, s1r = r[risk].sum(), (r[risk, None] * W[risk]).sum(0)
             s2r = (r[risk, None, None] * W[risk, :, None] * W[risk, None, :]).sum(0)

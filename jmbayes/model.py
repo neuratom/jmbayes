@@ -1,9 +1,11 @@
 """Model setup: the Python counterpart of jm() in R/jm.R and jm_fit() in R/jm_fit.R.
 
-Scope of this first version (matches the README pbc2 model):
+Scope:
   * longitudinal families: gaussian (identity link), binomial (logit link)
-  * functional form: value() of each outcome, no transformations
-  * one stratum, right-censored event times, no recurrent events / weights
+  * functional forms: value(), slope(), area(), no transformations
+  * right-censored event times; one event, or competing risks with cause-specific
+    hazards (one stratum per cause, as crisk_setup() + strata(CR)); no recurrent
+    events or weights
 Anything outside this scope raises NotImplementedError rather than silently
 fitting a different model.
 """
@@ -92,6 +94,19 @@ class ModelData:
     sid_names: list = field(default_factory=list)
     # how the data were set up, to rebuild designs for new patients
     meta: dict = field(default_factory=dict)
+    # competing risks: survival rows are (patient, cause) pairs, as after crisk_setup();
+    # idT maps each row to its patient and strata to its cause. None: one row per patient
+    idT: np.ndarray | None = None
+    strata: np.ndarray | None = None
+    causes: list | None = None
+
+    @property
+    def n_strata(self) -> int:
+        return 1 if self.causes is None else len(self.causes)
+
+    @property
+    def row_patient(self) -> np.ndarray:
+        return np.arange(self.n) if self.idT is None else self.idT
 
 
 def _bspline_basis(x, knots, degree):
@@ -272,29 +287,67 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
         raise ValueError("survival data must have one row per subject in the longitudinal data")
     dataS = dataS.assign(_sid=dataS["_sid"].astype("int64"))
     dataS = dataS.sort_values("_sid").reset_index(drop=True)
-    time = dataS[surv["time"]].astype(float).to_numpy()
-    event = dataS[surv["event"]].astype(float).to_numpy()
-    if not np.all(np.isin(event, [0, 1])):
-        raise NotImplementedError("only right-censored data")
+    time_p = dataS[surv["time"]].astype(float).to_numpy()
     surv_levels = {}
-    W_raw, w_names, _ = surv["covariates"].without_intercept().build(dataS, surv_levels)
+    W_p, w_names_p, _ = surv["covariates"].without_intercept().build(dataS, surv_levels)
+    causes = surv.get("causes")
+    if causes is None:
+        event = dataS[surv["event"]].astype(float).to_numpy()
+        if not np.all(np.isin(event, [0, 1])):
+            raise NotImplementedError("only right-censored data")
+        idT, strata, time, W_raw, w_names = None, None, time_p, W_p, w_names_p
+        n_strata, row_pat = 1, np.arange(n)
+    else:
+        # competing risks, as crisk_setup(): one row per patient and cause, the event
+        # indicator of each row is 1 for the cause that occurred; every covariate gets a
+        # cause-specific effect (columns ordered covariate-major, like x:strata(CR))
+        n_strata = len(causes)
+        status = dataS[surv["event"]].astype(str).to_numpy()
+        idT = np.repeat(np.arange(n), n_strata)
+        strata = np.tile(np.arange(n_strata), n)
+        row_pat = idT
+        time = time_p[idT]
+        event = (status[idT] == np.asarray(causes, dtype=str)[strata]).astype(float)
+        p0 = W_p.shape[1]
+        W_raw = np.zeros((len(idT), p0 * n_strata))
+        for j in range(p0):
+            for k in range(n_strata):
+                rows = strata == k
+                W_raw[rows, j * n_strata + k] = W_p[idT[rows], j]
+        w_names = [f"{nm} [{c}]" for nm in w_names_p for c in causes]
     if initial_fits is None:
-        gammas_cox = fit_coxph(time, event, W_raw)
+        gammas_cox = fit_coxph(time, event, W_raw, strata)
     else:
         gammas_cox = np.atleast_1d(np.asarray(initial_fits["gammas"], float))
 
-    # --- quadrature
+    # --- quadrature (per survival row)
+    R = len(time)
     P = time / 2.0
-    st = P[:, None] * GK_SK[None, :] + P[:, None]                # (n, 15)
+    st = P[:, None] * GK_SK[None, :] + P[:, None]                # (R, 15)
     log_Pwk = (np.log(P)[:, None] + np.log(GK_WK)[None, :]).ravel()
     st_flat = st.ravel()
-    sid_H = np.repeat(np.arange(n), GK_k)
+    sid_H = np.repeat(row_pat, GK_k)                             # quadrature point -> patient
+    rid_H = np.repeat(np.arange(R), GK_k)                        # quadrature point -> row
 
-    knots = _knots(time, base_hazard_segments, Bsplines_degree)
-    W0_H = _bspline_basis(st_flat, knots, Bsplines_degree)
-    W0_h = _bspline_basis(time, knots, Bsplines_degree)
+    if n_strata == 1:
+        knots = _knots(time, base_hazard_segments, Bsplines_degree)
+        W0_H = _bspline_basis(st_flat, knots, Bsplines_degree)
+        W0_h = _bspline_basis(time, knots, Bsplines_degree)
+    else:
+        # create_W0(): one block of spline columns per stratum, knots from each stratum's
+        # times (identical here, since every patient has a row in every stratum)
+        knots = _knots(time[strata == 0], base_hazard_segments, Bsplines_degree)
+        bH = _bspline_basis(st_flat, knots, Bsplines_degree)
+        bh = _bspline_basis(time, knots, Bsplines_degree)
+        nb0 = bH.shape[1]
+        W0_H = np.zeros((len(st_flat), nb0 * n_strata))
+        W0_h = np.zeros((R, nb0 * n_strata))
+        strata_H = strata[rid_H]
+        for k in range(n_strata):
+            W0_H[strata_H == k, k * nb0:(k + 1) * nb0] = bH[strata_H == k]
+            W0_h[strata == k, k * nb0:(k + 1) * nb0] = bh[strata == k]
 
-    W_H = W_raw[sid_H]
+    W_H = W_raw[rid_H]
     W_h = W_raw.copy()
     W_bar = W_H.mean(0)
     W_sds = W_H.std(0, ddof=1)
@@ -303,10 +356,16 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
 
     # --- designs at quadrature points (H) and event times (h)
     designer = TimeDesigner(dataL_filled, time_var)
-    time_sets = {"H": st, "h": time[:, None]}
+    st_p = (time_p / 2.0)[:, None] * GK_SK[None, :] + (time_p / 2.0)[:, None]
+    time_sets = {"H": st_p, "h": time_p[:, None]}
 
     def form_design(form, terms, levels_, where, center=None):
-        return designer.design(form, terms, levels_, time_sets[where], where, center)
+        D = designer.design(form, terms, levels_, time_sets[where], where, center)
+        if idT is None:
+            return D
+        if where == "H":                                         # patient -> its rows
+            return D.reshape(n, GK_k, -1)[idT].reshape(R * GK_k, -1)
+        return D[idT]
 
     # --- per-outcome data and separate fits
     outcomes, fits = [], []
@@ -353,12 +412,18 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
         # association designs at quadrature points and at event times
         assoc = []
         for form in m.get("forms", ["value"]):
-            assoc.append(dict(
-                form=form,
-                X_H=form_design(form, fixed, levels, "H", Xbar),
-                Z_H=form_design(form, random, levels, "H"),
-                X_h=form_design(form, fixed, levels, "h", Xbar),
-                Z_h=form_design(form, random, levels, "h")))
+            d_ = dict(form=form,
+                      X_H=form_design(form, fixed, levels, "H", Xbar),
+                      Z_H=form_design(form, random, levels, "H"),
+                      X_h=form_design(form, fixed, levels, "h", Xbar),
+                      Z_h=form_design(form, random, levels, "h"))
+            if idT is None:
+                assoc.append(d_)
+            else:            # value(x):CR - one column per cause, zero on other rows
+                for k, c in enumerate(causes):
+                    assoc.append(dict(d_, cause=c,
+                                      u_H=(strata[rid_H] == k).astype(float),
+                                      u_h=(strata == k).astype(float)))
         qj, pj = Z.shape[1], X.shape[1]
         outcomes.append(Outcome(lhs, fam, y, X, Z, sid, x_names, z_names, assoc,
                                 np.arange(re_off, re_off + qj),
@@ -426,16 +491,19 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
     b = np.zeros((n, q))
     for o, f in zip(outcomes, fits):
         b[np.ix_(np.unique(o.sid), o.re_cols)] = f.b
-    nb = W0_H.shape[1]
+    nb = W0_H.shape[1] // n_strata                     # spline coefficients per stratum
     inits = dict(betas=np.concatenate(betas), log_sigmas=log_sigmas, D=D, b=b,
-                 bs_gammas=np.full(nb, -0.1), gammas=gammas_cox.copy(),
+                 bs_gammas=np.full(nb * n_strata, -0.1), gammas=gammas_cox.copy(),
                  alphas=np.zeros(sum(len(o.assoc) for o in outcomes)),
-                 tau_bs_gammas=np.array([20.0 if base_hazard_segments > 1 else 0.001]))
+                 tau_bs_gammas=np.full(n_strata,
+                                       20.0 if base_hazard_segments > 1 else 0.001))
 
     # --- Wlong scaling, from the (unjittered) initial values (create_Wlong_mats)
-    Wl = np.column_stack([a["X_H"] @ bj + (a["Z_H"] * b[sid_H][:, o.re_cols]).sum(1)
+    Wl = np.column_stack([a.get("u_H", 1.0) * (a["X_H"] @ bj
+                                                + (a["Z_H"] * b[sid_H][:, o.re_cols]).sum(1))
                           for o, bj in zip(outcomes, betas) for a in o.assoc])
-    assoc_names = [f"{a['form']}({o.name})" for o in outcomes for a in o.assoc]
+    assoc_names = [f"{a['form']}({o.name})" + (f" [{a['cause']}]" if "cause" in a else "")
+                   for o in outcomes for a in o.assoc]
     assoc_outcome = np.array([j for j, o in enumerate(outcomes) for _ in o.assoc])
     n_assoc = len(assoc_names)
     Wlong_bar = Wl.mean(0)
@@ -443,7 +511,8 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
 
     # --- priors (jm.R lines 710-760)
     Dd = np.diff(np.eye(nb), n=diff_order if nb > 3 else 1, axis=0)
-    Tau_bs = Dd.T @ Dd
+    Tau_bs1 = Dd.T @ Dd
+    Tau_bs = np.kron(np.eye(n_strata), Tau_bs1)       # one penalty block per stratum
     # prior means: the fitted fixed effects, intercept moved to the centred scale;
     # prior precisions: weak_informative_Tau() on the centred covariance (vcov_center)
     p_all = sum(len(bj) for bj in betas)
@@ -464,9 +533,9 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
         mean_betas_HC=mean_all[ind_FE_HC],
         Tau_betas_HC=Tau_all[np.ix_(ind_FE_HC, ind_FE_HC)],
         mean_betas_nHC=mean_nhc, Tau_betas_nHC=Tau_nhc,
-        mean_bs_gammas=np.zeros(nb), Tau_bs_gammas=Tau_bs,
+        mean_bs_gammas=np.zeros(nb * n_strata), Tau_bs_gammas=Tau_bs,
         A_tau_bs_gammas=5.0, B_tau_bs_gammas=0.5,
-        rank_Tau_bs_gammas=float(np.linalg.matrix_rank(Tau_bs)),
+        rank_Tau_bs_gammas=float(np.linalg.matrix_rank(Tau_bs1)),     # per stratum
         mean_gammas=gammas_cox.copy(), Tau_gammas=np.eye(len(gammas_cox)) * 0.25,
         mean_alphas=np.zeros(n_assoc), Tau_alphas=np.eye(n_assoc) * 0.25,
         D_sds_shape=5.0, D_sds_mean=np.sqrt(np.diag(D)), D_L_etaLKJ=3.0,
@@ -485,4 +554,5 @@ def jm_setup(dataL: pd.DataFrame, dataS: pd.DataFrame, long_models: list,
                      priors=priors, inits=inits,
                      beta_names=beta_names, sid_names=ids_unique,
                      meta=dict(id_var=id_var, time_var=time_var, surv=dict(surv),
-                               surv_levels=surv_levels, Bsplines_degree=Bsplines_degree))
+                               surv_levels=surv_levels, Bsplines_degree=Bsplines_degree),
+                     idT=idT, strata=strata, causes=None if causes is None else list(causes))

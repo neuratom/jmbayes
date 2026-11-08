@@ -84,7 +84,12 @@ class JointModelSampler:
         self.W_H, self.W_h = t(md.W_H), t(md.W_h)
         self.log_Pwk = t(md.log_Pwk)
         self.event = t(md.event)
-        self.sid_H = ti(np.repeat(np.arange(md.n), md.GK_k))
+        # survival rows: one per patient, or one per patient and cause (competing risks)
+        self.R = len(md.event)
+        self.cr = md.idT is not None
+        self.S = md.n_strata
+        self.idT = ti(md.row_patient)
+        self.sid_H = ti(np.repeat(md.row_patient, md.GK_k))
         self.Wlong_bar = t(md.Wlong_bar)
         self.Wlong_isd = 1.0 / t(md.Wlong_sds)
         self.outs = []
@@ -102,7 +107,9 @@ class JointModelSampler:
         for j, o in enumerate(md.outcomes):
             for a in o.assoc:
                 self.assoc.append(dict(j=j, form=a["form"], X_H=t(a["X_H"]), Z_H=t(a["Z_H"]),
-                                       X_h=t(a["X_h"]), Z_h=t(a["Z_h"])))
+                                       X_h=t(a["X_h"]), Z_h=t(a["Z_h"]),
+                                       u_H=t(a["u_H"]) if "u_H" in a else None,
+                                       u_h=t(a["u_h"]) if "u_h" in a else None))
         self.A = len(self.assoc)
         self.cols_of = [[c for c, a in enumerate(self.assoc) if a["j"] == j]
                         for j in range(self.n_out)]
@@ -121,6 +128,8 @@ class JointModelSampler:
         self.m_nhc = [t(m) for m in pr.get("mean_betas_nHC", [np.zeros(0)] * self.n_out)]
         self.T_nhc = [t(T) for T in pr.get("Tau_betas_nHC", [np.zeros((0, 0))] * self.n_out)]
         self.Tau_mean_HC = self.pr["Tau_betas_HC"] @ self.pr["mean_betas_HC"]
+        nb = md.W0_H.shape[1] // self.S
+        self.Tau_bs1 = self.pr["Tau_bs_gammas"][:nb, :nb]          # one stratum's block
         i = np.arange(1, self.q)
         self.lkj_coef = t(self.q - i - 1.0 + 2.0 * pr["D_L_etaLKJ"] - 2.0)
 
@@ -161,9 +170,14 @@ class JointModelSampler:
             bj = bj[:, self.sid_H, :]
         else:
             X, Z = a["X_h"], a["Z_h"]
+            if self.cr:
+                bj = bj[:, self.idT, :]
         return betas[:, o["fe"]] @ X.T + (Z * bj).sum(-1)
 
     def wlong_col(self, c, eta):
+        a = self.assoc[c]
+        if a["u_H"] is not None:          # cause-specific column: zero on other causes' rows
+            eta = eta * (a["u_H"] if eta.shape[-1] == a["u_H"].shape[0] else a["u_h"])
         return (eta - self.Wlong_bar[c]) * self.Wlong_isd[c]
 
     def refresh_assoc(self, s, betas, b):
@@ -177,8 +191,12 @@ class JointModelSampler:
 
     def log_surv(self, W0H_bs, WH_g, WlH_a, W0h_bs, Wh_g, Wlh_a):
         lam = torch.exp(self.log_Pwk + W0H_bs + WH_g + WlH_a)
-        H = lam.view(lam.shape[0], self.n, self.K).sum(-1)
-        return -H + self.event * (W0h_bs + Wh_g + Wlh_a)
+        H = lam.view(lam.shape[0], self.R, self.K).sum(-1)
+        out = -H + self.event * (W0h_bs + Wh_g + Wlh_a)
+        if self.cr:                       # sum each patient's rows (one per cause)
+            out = torch.zeros(out.shape[0], self.n, dtype=self.dt,
+                              device=self.dev).index_add_(1, self.idT, out)
+        return out
 
     def re_const(self, L, sds):
         return -self.q / 2 * LOG2PI - torch.log(torch.diagonal(L, dim1=-2, dim2=-1)).sum(-1) \
@@ -195,8 +213,17 @@ class JointModelSampler:
         z = x - mean
         return ((z @ Tau) * z).sum(-1)
 
+    def bs_quad(self, bs):
+        """Penalty bs' Tau bs of each stratum's spline coefficients, (C, strata)."""
+        x = bs.view(bs.shape[0], self.S, -1)
+        return ((x @ self.Tau_bs1) * x).sum(-1)
+
     def log_prior_surv(self, bs, gammas, alphas, tau_bs):
         pr = self.pr
+        if self.S > 1:
+            return (-0.5 * (tau_bs * self.bs_quad(bs)).sum(-1)
+                    - 0.5 * self.quad(gammas, pr["mean_gammas"], pr["Tau_gammas"])
+                    - 0.5 * self.quad(alphas, pr["mean_alphas"], pr["Tau_alphas"]))
         return (-0.5 * tau_bs * self.quad(bs, pr["mean_bs_gammas"], pr["Tau_bs_gammas"])
                 - 0.5 * self.quad(gammas, pr["mean_gammas"], pr["Tau_gammas"])
                 - 0.5 * self.quad(alphas, pr["mean_alphas"], pr["Tau_alphas"]))
@@ -233,7 +260,8 @@ class JointModelSampler:
         s = dict(betas=self.t(jit(ini["betas"])), b=self.t(jit(ini["b"])),
                  bs=self.t(jit(ini["bs_gammas"])), gammas=self.t(jit(ini["gammas"])),
                  alphas=self.t(jit(ini["alphas"])),
-                 tau=self.t(jit(ini["tau_bs_gammas"]))[:, 0].contiguous())
+                 tau=self.t(jit(ini["tau_bs_gammas"])))
+        s["tau"] = s["tau"][:, 0].contiguous() if self.S == 1 else s["tau"].contiguous()
         s["sigmas"] = torch.exp(self.t(jit(ini["log_sigmas"])))
         D = ini["D"]
         sds = np.sqrt(np.diag(D))
@@ -266,7 +294,7 @@ class JointModelSampler:
         # outputs (small: iterations x chains x parameters) and running summaries
         z = lambda *sh: torch.zeros(*sh, dtype=dt, device=dev)  # noqa: E731
         p = s["betas"].shape[1]
-        for k, w in dict(r_bs=s["bs"].shape[1], r_tau=1, r_gammas=s["gammas"].shape[1],
+        for k, w in dict(r_bs=s["bs"].shape[1], r_tau=self.S, r_gammas=s["gammas"].shape[1],
                          r_alphas=self.A, r_sds=self.q, r_L=len(self.up), r_betas=p,
                          r_sigmas=self.n_out).items():
             s[k] = z(n_iter, C, w)
@@ -362,7 +390,8 @@ class JointModelSampler:
 
     def update_tau(self, s):
         pr = self.pr
-        quad = self.quad(s["bs"], pr["mean_bs_gammas"] * 0, pr["Tau_bs_gammas"])
+        quad = (self.quad(s["bs"], pr["mean_bs_gammas"] * 0, pr["Tau_bs_gammas"])
+                if self.S == 1 else self.bs_quad(s["bs"]))      # one tau per stratum
         shape = pr["A_tau_bs_gammas"] + 0.5 * pr["rank_Tau_bs_gammas"]
         rate = pr["B_tau_bs_gammas"] + 0.5 * quad
         s["tau"] = torch._standard_gamma(torch.full_like(rate, shape)) / rate
@@ -456,7 +485,8 @@ class JointModelSampler:
                 part_p = self.ll_long_subj(j, eta_p, s["sigmas"][:, j])
                 ll_long_p = s["ll_long"] - s[f"llp{j}"] + part_p
                 deltaH = delta[:, self.sid_H]
-                prop = self.assoc_shift(s, j, lambda a, k=k, dH=deltaH, d=delta: (
+                delta_h = delta[:, self.idT] if self.cr else delta
+                prop = self.assoc_shift(s, j, lambda a, k=k, dH=deltaH, d=delta_h: (
                     a["Z_H"][:, k] * dH, a["Z_h"][:, k] * d))
                 WlH_a_p, Wlh_a_p = prop["WlH_a"], prop["Wlh_a"]
                 ll_surv_p = self.surv(s, WlH_a=WlH_a_p, Wlh_a=Wlh_a_p)
@@ -473,7 +503,7 @@ class JointModelSampler:
                 s["ll_surv"] = torch.where(acc, ll_surv_p, s["ll_surv"])
                 s["ll_re"] = torch.where(acc, ll_re_p, s["ll_re"])
                 s[f"eta{j}"] = torch.where(acc[:, o["sid"]], eta_p, s[f"eta{j}"])
-                self.assoc_accept(s, prop, accH, acc)
+                self.assoc_accept(s, prop, accH, acc[:, self.idT] if self.cr else acc)
                 s["acc_b"][:, :, col] += (acc & keep).to(self.dt)
                 sc = s["sc_b"][:, :, col]
                 s["sc_b"][:, :, col] = torch.where(adapt, robbins_monro(sc, acc, it100), sc)
@@ -598,7 +628,7 @@ class JointModelSampler:
         self.update_vector(s, "bs", "sc_bs", self.W0_H, self.W0_h, "W0H_bs", "W0h_bs", itf)
         self.record(s, "r_bs", s["bs"])
         self.update_tau(s)
-        self.record(s, "r_tau", s["tau"][:, None])
+        self.record(s, "r_tau", s["tau"][:, None] if self.S == 1 else s["tau"])
         if s["gammas"].shape[1]:
             self.update_vector(s, "gammas", "sc_g", self.W_H, self.W_h, "WH_g", "Wh_g", itf)
             self.record(s, "r_gammas", s["gammas"])

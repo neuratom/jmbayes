@@ -115,7 +115,10 @@ def collect(md: ModelData, out: dict, n_thin=1):
                         list(md.assoc_names))
     blocks["bs_gammas"] = (sw(out["bs_gammas"]),
                            [f"bs_gammas_{k + 1}" for k in range(out["bs_gammas"].shape[2])])
-    blocks["tau_bs_gammas"] = (sw(out["tau_bs_gammas"]), ["tau_bs_gammas"])
+    n_tau = out["tau_bs_gammas"].shape[2]
+    blocks["tau_bs_gammas"] = (sw(out["tau_bs_gammas"]),
+                               ["tau_bs_gammas"] if n_tau == 1
+                               else [f"tau_bs_gammas_{k + 1}" for k in range(n_tau)])
     C, S = blocks["gammas"][0].shape[:2]
     Dv, Dn = build_D(sw(out["sds"]).reshape(C * S, -1), sw(out["L"]).reshape(C * S, -1),
                      md.upper_part, md.q, [tuple(z) for z in md.ind_zero_D])

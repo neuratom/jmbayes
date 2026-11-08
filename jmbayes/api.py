@@ -97,12 +97,18 @@ class Event:
     """The event-time sub-model (proportional hazards with a spline baseline hazard).
 
     time:       follow-up time column (same scale as the visit times)
-    event:      event indicator column, coded 0/1
+    event:      event indicator column, coded 0/1; or, for competing risks, a column
+                naming what happened (e.g. "alive", "transplanted", "dead")
     covariates: baseline covariates, e.g. sex, ["sex", "age"] or var("sex") * var("age")
+    censored:   competing risks: the value of `event` that means no event (e.g. "alive").
+                Every other value is a cause, with its own baseline hazard, its own
+                covariate effects and its own marker associations (cause-specific
+                hazards, as with crisk_setup() and strata(CR) in JMbayes2).
     """
     time: str
     event: str
     covariates: object = None
+    censored: object = None
 
     def __post_init__(self):
         self.covariates = as_terms(self.covariates).without_intercept()
@@ -371,6 +377,45 @@ class JointModelFit:
                         n_mcmc=n_mcmc, level=level, seed=seed, device=device, type=type,
                         draws=draws, r_sampling=r_sampling)
 
+    # ---- accuracy of dynamic predictions ------------------------------------------
+    # newdata: visits data (one row per measurement) with each patient's follow-up time
+    # and event. Patients still event-free at t_start are used, with their measurements
+    # up to t_start, to predict the risk of the event by t_horizon (= t_start + dt).
+    # Extra keyword arguments go to predict() (e.g. n_samples, seed, r_sampling).
+    def tv_roc(self, newdata: pd.DataFrame, t_start: float, t_horizon: float | None = None,
+               dt: float | None = None, weights: str = "model-based", **predict_options):
+        """Time-dependent ROC curve (sensitivity and specificity at 101 cut-offs), as
+        tvROC() in JMbayes2. weights: "model-based" (default) or "IPCW" for patients
+        censored before t_horizon."""
+        from jmbayes import accuracy
+        return accuracy.tv_roc(self, newdata, t_start, t_horizon, dt, weights,
+                               **predict_options)
+
+    def tv_auc(self, newdata: pd.DataFrame, t_start: float, t_horizon: float | None = None,
+               dt: float | None = None, weights: str = "model-based", **predict_options):
+        """Time-dependent AUC (discrimination), as tvAUC() in JMbayes2."""
+        from jmbayes import accuracy
+        return accuracy.tv_auc(self, newdata, t_start, t_horizon, dt, weights,
+                               **predict_options)
+
+    def tv_brier(self, newdata: pd.DataFrame, t_start: float, t_horizon: float | None = None,
+                 dt: float | None = None, integrated: bool = False,
+                 weights: str = "model-based", **predict_options):
+        """Time-dependent Brier score at t_horizon, or integrated over [t_start,
+        t_horizon) with integrated=True, as tvBrier() in JMbayes2."""
+        from jmbayes import accuracy
+        return accuracy.tv_brier(self, newdata, t_start, t_horizon, dt, integrated, weights,
+                                 **predict_options)
+
+    def calibration(self, newdata: pd.DataFrame, t_start: float,
+                    t_horizon: float | None = None, dt: float | None = None,
+                    df_ns: int | None = None, **predict_options):
+        """Calibration at t_horizon: ICI, E50, E90 and the observed-vs-predicted curve
+        (.curve), as calibration_metrics() and calibration_plot() in JMbayes2."""
+        from jmbayes import accuracy
+        return accuracy.calibration(self, newdata, t_start, t_horizon, dt, df_ns,
+                                    **predict_options)
+
     # ---- persistence -----------------------------------------------------------
     def save(self, path: str) -> None:
         """Save the fitted model to a file (reload with jmbayes.load)."""
@@ -478,7 +523,8 @@ def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_cha
         raise ValueError(f"dtype must be 'float64' or 'float32', got {dtype!r} (16-bit "
                          "formats are too coarse for MCMC acceptance decisions)")
     ck.check_patients(patients, model.id, model.event.time, model.event.event,
-                      model.event.covariates.variables())
+                      model.event.covariates.variables(), censored=model.event.censored)
+    causes = ck.event_causes(patients[model.event.event], model.event.censored)
     ck.check_visits(visits, model.id, model.time, _marker_specs(model))
     ck.check_same_patients(visits, patients, model.id)
     if n_iter is not None and n_burnin >= n_iter:
@@ -494,7 +540,8 @@ def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_cha
                      for m in model.markers],
         which_independent=model.independent,
         surv=dict(time=model.event.time, event=model.event.event,
-                  covariates=model.event.covariates),
+                  covariates=model.event.covariates, causes=causes,
+                  censored=model.event.censored),
         id_var=model.id, time_var=model.time, base_hazard_segments=base_hazard_segments,
         Bsplines_degree=Bsplines_degree, initial_fits=initial_fits)
     t_setup = time.perf_counter() - t0

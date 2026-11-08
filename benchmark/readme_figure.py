@@ -27,6 +27,8 @@ plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 9, "axes.edgecol
 EXTRAPOLATE = False            # R runs at 60k/90k are being measured, not guessed
 EXTRAP = {"R"} if EXTRAPOLATE else set()
 COHORTS = (1560, 3120)          # iteration sweeps; the largest is drawn in full colour
+# timings known to be disturbed (the run overlapped with other work): time not plotted
+BAD_TIME = {("R", 10, 60000)}
 SC = {}
 for line in open(HERE / "scaling_results.jsonl"):
     r = json.loads(line)
@@ -54,6 +56,8 @@ def fmt(v, key, minutes):
 
 
 def draw(ax, impl, pts, key, scale, minutes, color, lw, lab, x_max=None, note=True):
+    if key == "mcmc_s":
+        pts = [p for p in pts if (impl, p[1]["k"], p[1]["n_iter"]) not in BAD_TIME]
     x = [p[0] for p in pts]
     y = [p[1][key] for p in pts]
     ax.plot(x, [v / scale for v in y], "-o", color=color, lw=lw, ms=4.5, mec="white",
@@ -111,7 +115,7 @@ def main():
         for j, a in enumerate(axes[i]):
             a.set_ylim(bottom=0)
             a.margins(x=0.2 if j else 0.16)
-            a.legend(frameon=False, fontsize=7, loc="upper left" if j == 0 else "center right")
+            a.legend(frameon=False, fontsize=7, loc="upper left" if j == 0 else ("center right" if i == 0 else "upper left"))
             a.xaxis.set_major_formatter(FuncFormatter(
                 lambda v, _, j=j: f"{v / 1000:.0f}k" if j and v >= 1000 else f"{v:,.0f}"))
     axes[0, 0].set_title("More patients (3,500 iterations)", fontsize=10, color=INK, loc="left")

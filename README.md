@@ -1,11 +1,11 @@
 # `jmbayes`: JMBayes2 Accelerated Python Implementation
 
 Bayesian joint models for longitudinal and time-to-event data, in Python on the GPU.
-**Up to 14× faster than JMbayes2, with 18× less memory, and the same results.**
+**Up to 10× faster than JMbayes2, with up to 27× less memory, and the same results.**
 
 |  | JMbayes2 | jmbayes |
 |---|---:|---:|
-| 3,120 patients, 60,000 iterations | 98 min, 25.2 GB RAM | **7 min, 1.4 GB RAM** |
+| 3,120 patients, 90,000 iterations | 104 min, 37.8 GB RAM | **11 min, 1.4 GB RAM** |
 
 jmbayes is a reimplementation of the R package
 [JMbayes2](https://github.com/drizopoulos/JMbayes2) by Rizopoulos, Papageorgiou and
@@ -14,16 +14,19 @@ Miranda Afonso: the same model, the same priors and the same MCMC algorithm.
 * **Long runs on large cohorts, on ordinary hardware.** jmbayes uses 1.3–1.4 GB of RAM
   and under 0.2 GB of GPU memory in every run we measured, from 3,500 to 90,000
   iterations. JMbayes2's memory grows with cohort size × run length: for 3,120 patients
-  it needs 12 GB at 28,000 iterations and 25 GB at 60,000, more than a 16 GB machine has.
+  it needs 12 GB at 28,000 iterations and 38 GB at 90,000, more than most machines have.
 * **The bigger the problem, the bigger the gap.** 3.3× faster than JMbayes2 on 312
-  patients, 8–9× on 1,560–3,120 patients at JMbayes2's default run length, and up to 14×
-  on long runs. With ten times the
+  patients, 8–9× on 1,560–3,120 patients at JMbayes2's default run length, and 10× on
+  long runs. With ten times the
   patients, jmbayes takes 1.4× longer and JMbayes2 3.7× longer
   (see [Benchmarks](#benchmarks)).
 * **The same answers, formally tested.** In equivalence tests against JMbayes2, all 50
   model parameters agree within 0.2 posterior SD and every regression coefficient leads
   to the same conclusion. jmbayes and JMbayes2 differ from each other no more than two
   JMbayes2 runs with different seeds do.
+* **Competing risks and prediction accuracy.** Cause-specific hazards as in JMbayes2,
+  and time-dependent AUC, ROC, Brier score and calibration that reproduce JMbayes2's
+  numbers.
 * **A Python interface**, plus JMbayes2-style formula strings if you prefer them.
 
 ## Install
@@ -119,12 +122,12 @@ The two programs agree. Hazard ratios from the same model, fitted by each progra
 | 3,120 | 7,000  | 450 s   | 3.44 GB | 48 s  | 1.31 GB | 9.4× |
 | 3,120 | 14,000 | 521 s   | 6.15 GB | 96 s  | 1.32 GB | 5.4× |
 | 3,120 | 28,000 | 2,056 s | 12.0 GB | 196 s | 1.33 GB | 10.5× |
-| 3,120 | 60,000 | 5,893 s | 25.2 GB | 429 s | 1.39 GB | 13.7× |
+| 3,120 | 60,000 | 5,893 s* | 25.2 GB | 429 s | 1.39 GB | |
 | 1,560 | 90,000 | -       | -       | 529 s | 1.36 GB | |
-| 3,120 | 90,000 | -       | -       | 643 s | 1.38 GB | |
+| 3,120 | 90,000 | 6,266 s | 37.8 GB | 643 s | 1.38 GB | 9.7× |
 
-JMbayes2 runs at 90,000 iterations, and at 60,000 for 1,560 patients, are still in
-progress.
+\* This JMbayes2 run overlapped with other work on the machine (98 ms per iteration,
+against 70–73 ms at 28,000 and 90,000 iterations), so no speed-up is given for it.
 
 The speed comes from the GPU. On the CPU alone, jmbayes is about as fast as JMbayes2 on
 small cohorts and slower on large ones, with less than half the memory (the CPU runs are
@@ -184,6 +187,50 @@ from JMbayes2's by a few percentage points for some patients (up to 0.07 for PBC
 patient 93). `fit.predict(..., r_sampling=True)` uses JMbayes2's method; given the same
 posterior draws, it matches JMbayes2's predictions to within 0.01.
 
+## Check how good the predictions are
+
+Using each patient's measurements up to year 5, how well does the model predict who has
+the event by year 7? Pass data the model has not seen (e.g. a test set) for an honest
+answer; here the fitting data is used for brevity:
+
+```python
+fit.tv_auc(visits, t_start=5, dt=2)        # discrimination: time-dependent AUC
+fit.tv_roc(visits, t_start=5, dt=2)        # sensitivity and specificity per cut-off
+fit.tv_brier(visits, t_start=5, dt=2)      # Brier score (integrated=True: over years 5-7)
+fit.calibration(visits, t_start=5, dt=2)   # ICI, E50, E90; .curve for a calibration plot
+```
+
+These follow JMbayes2's `tvAUC()`, `tvROC()`, `tvBrier()` and `calibration_metrics()`,
+and give the same numbers from the same predicted risks. Patients censored before the
+horizon are handled with model-based weights by default (`weights="IPCW"` for
+Kaplan-Meier weights).
+
+## Competing risks
+
+When patients can have one of several events, name the value that means censored; every
+other value of the event column is a cause:
+
+```python
+patients["status"] = pd.Categorical(patients["status"], ["alive", "transplanted", "dead"])
+
+model = jmb.JointModel(
+    jmb.Event("years", "status", sex, censored="alive"),
+    [jmb.Marker(var("serBilir").log(), fixed=year * sex, random=year)],
+    id="id", time="year")
+fit = model.fit(visits, patients)
+fit.hazard_ratios()      # one row per effect and cause, e.g. "sexfemale [dead]"
+```
+
+This is the model JMbayes2 fits with `crisk_setup()` and `strata(CR)`: each cause has its
+own baseline hazard, covariate effects and marker associations. `fit.predict(...)` gives
+each cause's cumulative incidence (column `cause`). For death and transplantation in PBC,
+none of the 50 parameters differed from JMbayes2 in the same equivalence tests, and the
+hazard ratios agreed to two decimals
+([benchmark/compare_cr.py](https://github.com/neuratom/jmbayes/blob/main/benchmark/compare_cr.py)).
+JMbayes2 0.6-5's own `predict()` fails on this model, so the cumulative incidences were
+checked internally: summed over causes they match the overall risk. As in JMbayes2, the
+accuracy measures above are for single-event models only.
+
 ## Your own data
 
 You need two pandas data frames, as in JMbayes2:
@@ -240,7 +287,7 @@ Check convergence in `fit.survival_table()`: `Rhat` should be below about 1.05. 
 run longer or with more chains.
 
 Not supported yet (you get a clear error): outcome families other than gaussian and
-binomial, competing risks, strata, left truncation, interval censoring.
+binomial, strata other than competing risks, left truncation, interval censoring.
 
 ## Prefer R formulas?
 

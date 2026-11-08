@@ -111,7 +111,8 @@ fitting a different model.
 ## Next steps
 
 * More outcome families (Poisson, negative binomial, Student-t, beta, Gamma, censored normal).
-* Competing risks / strata, left truncation, interval censoring, time-varying survival covariates.
+* General strata (beyond competing risks), left truncation, interval censoring, time-varying
+  survival covariates.
 * Remaining association forms and transformations; interactions in functional forms.
 * Marginal DIC/WAIC/LPML; predictive accuracy tools (AUC, Brier score, calibration).
 * Faster set-up for large data (initial fits on the GPU with automatic differentiation).

@@ -25,6 +25,11 @@ from jmbayes.model import (GK_SK, GK_WK, TimeDesigner, _bspline_basis,
                               fill_within_subject)
 
 LOG2PI = math.log(2 * math.pi)
+# gaussKronrod(7) in help_functions.R: the 7-point Gauss rule (competing-risk CIFs)
+GK7_SK = GK_SK[:7]
+GK7_WK = np.array([0.12948496616887, 0.279705391489277, 0.381830050505119,
+                   0.417959183673469, 0.381830050505119, 0.279705391489277,
+                   0.12948496616887])
 
 
 # ------------------------------------------------------------------ parameters
@@ -107,7 +112,12 @@ class _NewData:
         self.ids, self.n = ids, len(ids)
         last = d.groupby("_sid", sort=True).tail(1).reset_index(drop=True)
         self.t_last = last[sv["time"]].astype(float).to_numpy()
-        if (last[sv["event"]].astype(float) != 0).any():
+        if md.causes is not None:
+            if (last[sv["event"]].astype(str) != str(sv["censored"])).any():
+                raise ValueError(f"set '{sv['event']}' to '{sv['censored']}' in newdata: "
+                                 "predictions are for patients event-free up to their "
+                                 "last time")
+        elif (last[sv["event"]].astype(float) != 0).any():
             raise ValueError(f"set '{sv['event']}' to 0 in newdata: predictions are for "
                              "patients event-free up to their last time")
         # longitudinal measurements
@@ -130,17 +140,52 @@ class _NewData:
         self.W0 = _bspline_basis(nodes.ravel(), md.knots,
                                  meta["Bsplines_degree"]).reshape(self.n, self.m, 15, -1)
         W_raw = sv["covariates"].without_intercept().build(last, dict(meta["surv_levels"]))[0]
-        self.W = (W_raw - md.W_bar) / md.W_sds                   # (n, P)
         designer = TimeDesigner(fill_within_subject(d), time_var)
-        Tn = nodes.reshape(self.n, -1)
-        self.assoc = []
-        for j, o in enumerate(md.outcomes):
-            for a in o.assoc:
-                Xa = designer.design(a["form"], o.fixed, o.levels, Tn, "nodes", o.Xbar)
-                Za = designer.design(a["form"], o.random, o.levels, Tn, "nodes")
-                self.assoc.append(dict(j=j, X=Xa, Z=Za))
         self.designer = designer
         self.d = d
+        self.cr = md.causes is not None
+        if not self.cr:
+            self.W = (W_raw - md.W_bar) / md.W_sds               # (n, P)
+            Tn = nodes.reshape(self.n, -1)
+            self.assoc = []
+            for j, o in enumerate(md.outcomes):
+                for a in o.assoc:
+                    Xa = designer.design(a["form"], o.fixed, o.levels, Tn, "nodes", o.Xbar)
+                    Za = designer.design(a["form"], o.random, o.levels, Tn, "nodes")
+                    self.assoc.append(dict(j=j, X=Xa, Z=Za))
+            return
+        # competing risks: covariates of each cause's row, standardised as in the fit
+        causes = md.causes
+        Kc, p0 = len(causes), W_raw.shape[1]
+        self.Wc = []
+        for k in range(Kc):
+            Wk = np.zeros((self.n, p0 * Kc))
+            Wk[:, np.arange(p0) * Kc + k] = W_raw
+            self.Wc.append((Wk - md.W_bar) / md.W_sds)
+        # points: H(u) nodes on [0, u] (sampling), the 7-point rule on [t, u] for the CIF
+        # integral, and 15 nodes on [0, s] for H(s) at each of those points
+        t0 = G[:, :1]
+        P7 = (G - t0) / 2.0
+        s7 = P7[..., None] * GK7_SK + ((G + t0) / 2.0)[..., None]       # (n, m, 7)
+        with np.errstate(divide="ignore"):
+            self.log_w7 = np.log(P7)[..., None] + np.log(GK7_WK)        # -inf when u = t
+        nodes_s = (s7 / 2.0)[..., None] * (GK_SK + 1.0)                 # (n, m, 7, 15)
+        with np.errstate(divide="ignore"):
+            self.log_Pwk_s = np.log(s7 / 2.0)[..., None] + np.log(GK_WK)
+        deg = meta["Bsplines_degree"]
+        self.sets = {}
+        for key, pts in (("H", nodes), ("h7", s7), ("H7", nodes_s)):
+            Tn = pts.reshape(self.n, -1)
+            B = _bspline_basis(Tn.ravel(), md.knots, deg).reshape(*pts.shape, -1)
+            des = {}
+            for j, o in enumerate(md.outcomes):
+                for form in dict.fromkeys(a["form"] for a in o.assoc):
+                    des[(j, form)] = (
+                        designer.design(form, o.fixed, o.levels, Tn, f"cr_{key}", o.Xbar),
+                        designer.design(form, o.random, o.levels, Tn, f"cr_{key}"))
+            self.sets[key] = dict(B=B, shape=pts.shape[1:], des=des)
+        self.assoc = [dict(j=j, form=a["form"], cause=causes.index(a["cause"]))
+                      for j, o in enumerate(md.outcomes) for a in o.assoc]
 
 
 # ------------------------------------------------------------------ the engine
@@ -159,14 +204,24 @@ class _Engine:
                      for L in nd.long]
         self.re = [torch.as_tensor(o.re_cols, device=self.dev) for o in md.outcomes]
         self.fe = [torch.as_tensor(o.fe_cols, device=self.dev) for o in md.outcomes]
-        self.assoc = [dict(j=a["j"], X=t(a["X"]), Z=t(a["Z"])) for a in nd.assoc]
         self.Wbar, self.Wisd = t(md.Wlong_bar), 1.0 / t(md.Wlong_sds)
+        self.families = [o.family for o in md.outcomes]
+        self.cr = nd.cr
+        if self.cr:
+            self.Kc = len(md.causes)
+            self.nb = self.th["bs"].shape[1] // self.Kc
+            self.Wg = [(t(W) @ self.th["gammas"].T).T for W in nd.Wc]    # (S, n) per cause
+            self.sets = {k: dict(B=t(v["B"]), shape=v["shape"],
+                                 des={jf: (t(X), t(Z)) for jf, (X, Z) in v["des"].items()})
+                         for k, v in nd.sets.items()}
+            self.log_Pwk = t(nd.log_Pwk)
+            return
+        self.assoc = [dict(j=a["j"], X=t(a["X"]), Z=t(a["Z"])) for a in nd.assoc]
         n, m = nd.n, nd.m
         # baseline part of the log hazard at every node: log P w + W0 bs + W gamma
         base = (t(nd.log_Pwk)[None] + torch.einsum("nmkb,sb->snmk", t(nd.W0), self.th["bs"])
                 + (t(nd.W) @ self.th["gammas"].T).T[:, :, None, None])
         self.base = base                                         # (S, n, m, 15)
-        self.families = [o.family for o in md.outcomes]
 
     def ll_long(self, b):
         S, n = self.S, self.nd.n
@@ -191,6 +246,10 @@ class _Engine:
         coefficients times standardised marker terms (each association divided by the
         marker's SD) and uncentred survival covariates. Used only to check agreement
         with R; see NOTES.md."""
+        if self.cr:
+            if r_sampling:
+                raise NotImplementedError("r_sampling is not available for competing risks")
+            return self.cumhaz_cr(b, cols)
         S, n, m = self.S, self.nd.n, self.nd.m
         cols = slice(None) if cols is None else cols
         lam = self.base[:, :, cols]
@@ -207,6 +266,59 @@ class _Engine:
             a_c = self.th["alphas"][:, c] * (self.Wisd[c] if r_sampling else 1.0)
             lam = lam + a_c[:, None, None, None] * w
         return torch.exp(lam).sum(-1)                            # (S, n, m')
+
+    # ---- competing risks: cause-specific log hazards at a set of time points
+    def _etas(self, b, key, sl=None):
+        """Linear predictor of every (outcome, form) used in an association, at the
+        points of set `key` (optionally only the grid columns sl), (S, n, *shape)."""
+        st, n = self.sets[key], self.nd.n
+        out = {}
+        for (j, form), (X, Z) in st["des"].items():
+            Xv = X.view(n, *st["shape"], -1)
+            Zv = Z.view(n, *st["shape"], -1)
+            if sl is not None:
+                Xv, Zv = Xv[:, sl], Zv[:, sl]
+            out[(j, form)] = (torch.einsum("n...p,sp->sn...", Xv, self.th["betas"][:, self.fe[j]])
+                              + torch.einsum("n...r,snr->sn...", Zv, b[:, :, self.re[j]]))
+        return out
+
+    def _loghaz(self, etas, key, k, sl=None):
+        """log hazard of cause k (standardised parametrisation, as in the sampler)."""
+        st = self.sets[key]
+        B = st["B"] if sl is None else st["B"][:, sl]
+        bs_k = self.th["bs"][:, k * self.nb:(k + 1) * self.nb]
+        lam = torch.einsum("n...b,sb->sn...", B, bs_k)
+        lam = lam + self.Wg[k].reshape(*self.Wg[k].shape, *([1] * (lam.dim() - 2)))
+        for c, a in enumerate(self.nd.assoc):
+            eta = etas[(a["j"], a["form"])]
+            w = ((eta if a["cause"] == k else 0.0 * eta) - self.Wbar[c]) * self.Wisd[c]
+            lam = lam + self.th["alphas"][:, c].reshape(-1, *([1] * (w.dim() - 1))) * w
+        return lam
+
+    def cumhaz_cr(self, b, cols=None):
+        """Total cumulative hazard over all causes at the grid times, (S, n, m')."""
+        sl = slice(None) if cols is None else cols
+        etas = self._etas(b, "H", sl)
+        lw = self.log_Pwk[:, sl][None]
+        return sum(torch.exp(lw + self._loghaz(etas, "H", k, sl)).sum(-1)
+                   for k in range(self.Kc))
+
+    def cif_cr(self, b):
+        """CIF of each cause from the last time t to every grid time u:
+        sum over the 7-point rule on [t, u] of w h_k(s) S(s), divided by S(t)
+        (the competing-risk branch of predict_Event())."""
+        H_t = self.cumhaz_cr(b, slice(0, 1))[..., 0]                    # (S, n)
+        etas_s = self._etas(b, "H7")
+        lw = self.t(self.nd.log_Pwk_s)[None]
+        H_s = sum(torch.exp(lw + self._loghaz(etas_s, "H7", k)).sum(-1)
+                  for k in range(self.Kc))                              # (S, n, m, 7)
+        etas_h = self._etas(b, "h7")
+        log_w = self.t(self.nd.log_w7)[None]
+        out = []
+        for k in range(self.Kc):
+            f = log_w + self._loghaz(etas_h, "h7", k) - H_s + H_t[:, :, None, None]
+            out.append(torch.exp(f).sum(-1))                            # (S, n, m)
+        return out
 
     def ll_re(self, b):
         L, sds = self.th["L"], self.th["sds"]
@@ -283,6 +395,19 @@ def predict(fit, newdata: pd.DataFrame, process: str = "event", times=None,
     eng = _Engine(fit, nd, draws, device)
     gen = torch.Generator(device=eng.dev).manual_seed(seed)
     b = eng.sample_b(n_mcmc, gen, r_sampling)
+    if process == "event" and md.causes is not None:
+        cifs = [c.cpu().numpy() for c in eng.cif_cr(b)]
+        rows = []
+        for i in range(nd.n):
+            k = nd.grid_len[i]
+            for ci, cause in enumerate(md.causes):
+                curves = np.stack([_normalize_cif(cifs[ci][s, i, :k]) for s in range(S)])
+                pred, low, upp = _summaries(curves, level)
+                for u, p_, l_, h_ in zip(nd.grid[i, :k], pred, low, upp):
+                    rows.append({md.meta["id_var"]: nd.ids[i], "cause": cause,
+                                 sv["time"]: u, "pred_CIF": p_, "low_CIF": l_,
+                                 "upp_CIF": h_})
+        return pd.DataFrame(rows)
     if process == "event":
         H = eng.cumhaz(b).cpu().numpy()                          # (S, n, m)
         cif = 1.0 - np.exp(-(H - H[:, :, :1]))

@@ -30,3 +30,4 @@
 {"impl": "R", "k": 10, "patients": 3120, "n_iter": 14000, "wall_s": 698.7390313999931, "peak_ram_gb": 6.151258112, "setup_s": 116.92, "mcmc_s": 521.23, "jm_total_s": 580.55, "gpu_peak_gb": 0.0}
 {"impl": "R", "k": 10, "patients": 3120, "n_iter": 28000, "wall_s": 2439.5159993999987, "peak_ram_gb": 12.017872896, "setup_s": 116.72, "mcmc_s": 2055.79, "jm_total_s": 2321.24, "gpu_peak_gb": 0.0}
 {"impl": "R", "k": 10, "patients": 3120, "n_iter": 60000, "wall_s": 6733.309971399998, "peak_ram_gb": 25.238073344, "setup_s": 287.8, "mcmc_s": 5893.36, "jm_total_s": 6443.38, "gpu_peak_gb": 0.0}
+{"impl": "R", "k": 10, "patients": 3120, "n_iter": 90000, "wall_s": 6856.926053699994, "peak_ram_gb": 37.839097856, "setup_s": 265.18, "mcmc_s": 6266.14, "jm_total_s": 6589.79, "gpu_peak_gb": 0.0}

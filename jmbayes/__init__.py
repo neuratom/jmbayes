@@ -25,4 +25,4 @@ from jmbayes.design import bs, ns, var
 
 __all__ = ["JointModel", "Marker", "Event", "var", "ns", "bs",
            "jm", "Longitudinal", "Survival", "JointModelFit", "load", "datasets", "DataError"]
-__version__ = "0.5.0"
+__version__ = "0.5.1"
