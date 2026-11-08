@@ -355,10 +355,44 @@ model) many were inconclusive, but two runs of the same program differed about
 as much as the two programs did, which points to slow mixing at this run length rather
 than to a difference. In the beta-binomial model, for example, the random intercepts of
 the two markers correlate at 0.98, so their associations with the hazard are nearly
-confounded. On both new data sets all 22 parameters were shown equivalent within
-$\pm 0.2$ SD.
-Hazard ratios agreed closely throughout (Table~\ref{tab:hr} in the appendix). The
-comparisons also found an error in jmbayes: for markers whose density is a difference of
+confounded.
+
+Figure~\ref{fig:hrscatter} compares all 79 hazard ratios of these models (each listed in
+Table~\ref{tab:hr} in the appendix): 78\% agree within 1\% and 92\% within 5\%. The
+largest differences (6--23\%) are in the beta-binomial model and the velocity-and-area
+model, where the associations are nearly confounded and two runs of the same program also
+differ; in posterior SDs these differences are at most 0.24 (Table~\ref{tab:ext}).
+
+\paragraph{Other data sets.} The tests above, like the main comparison, use the PBC data.
+To check that agreement does not depend on that data set, we fitted a joint model to each
+of the two other data sets that ship with JMbayes2. In the AIDS data (467 patients
+randomised to didanosine or zalcitabine), the square root of the CD4 count, with a random
+intercept and slope over time, was linked to death, adjusting for drug and a previous AIDS
+diagnosis. In the liver cirrhosis data (488 patients randomised to prednisone or placebo),
+the prothrombin index was linked to death, adjusting for treatment. In both, all 22
+parameters were shown equivalent within $\pm 0.2$ SD (18 and 19 within $\pm 0.1$ SD), and
+the hazard ratios agreed to the third decimal (Figure~\ref{fig:hrother}); for example, 1.39
+in both programs for didanosine and 0.83 in both for prednisone.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/hr_scatter.png}
+\caption{All hazard ratios of the 21 further-feature models, jmbayes against JMbayes2
+(left; the line is equality), and their relative differences (right). Posterior means, two
+seeds averaged per program.}
+\label{fig:hrscatter}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.9\linewidth]{figures/hr_other_data.png}
+\caption{Hazard ratios on the two data sets other than PBC, posterior mean and 95\%
+interval (mean $\pm$ 1.96 posterior SD of the log hazard ratio), two seeds averaged per
+program.}
+\label{fig:hrother}
+\end{figure}
+
+The comparisons also found an error in jmbayes: for markers whose density is a difference of
 large log-gamma terms (beta-binomial, negative binomial, beta and gamma), 32-bit rounding
 exceeded the signal at large dispersions, and the beta-binomial dispersion drifted
 upwards. These densities are now computed in 64-bit precision, and the affected
