@@ -1,8 +1,10 @@
 \begin{longtable}{lrrrr}
-\caption{Equivalence of jmbayes and JMbayes2 for the further features, two seeds per program. Equivalent: shown equivalent within $\pm 0.1$ / $\pm 0.2$ posterior SD. Differ: shown to differ by more than 0.2 SD. Largest: largest absolute difference, in posterior SDs.}\label{tab:ext}\\
+\caption{Equivalence of jmbayes and JMbayes2 for every model in this paper, judged the same way: two seeds per program (12 chains of 30,000 iterations for the first four models, 8 of 15,000 for the rest). Equivalent: shown equivalent within $\pm 0.1$ / $\pm 0.2$ posterior SD. Differ: shown to differ by more than 0.2 SD. Largest: largest absolute difference, in posterior SDs.}\label{tab:ext}\\
 \toprule Model & Parameters & Equivalent & Differ & Largest \\ \midrule \endfirsthead
 \toprule Model & Parameters & Equivalent & Differ & Largest \\ \midrule \endhead
 \bottomrule \endlastfoot
+Main model (PBC, 3 markers) & 50 & 43 / 50 & 0 & 0.042 \\
+Competing risks (PBC) & 50 & 27 / 36 & 0 & 0.065 \\
 Strata + late entry & 47 & 47 / 47 & 0 & 0.032 \\
 NB, Poisson, Student's $t$ & 50 & 50 / 50 & 0 & 0.034 \\
 Time-varying covariate & 23 & 23 / 23 & 0 & 0.026 \\

@@ -10,6 +10,7 @@ import pathlib
 HERE = pathlib.Path(__file__).resolve().parent
 PAPER = HERE.parent / "paper"
 MODELS = [
+    ("main", "Main model (PBC, 3 markers)"), ("cr", "Competing risks (PBC)"),
     ("surv", "Strata + late entry"), ("fam", "NB, Poisson, Student's $t$"),
     ("tvc", "Time-varying covariate"), ("icens", "Interval censoring"),
     ("crx", "Competing risks + entry + strata"), ("bystr", "Effects per stratum"),
@@ -43,7 +44,7 @@ def hr_table():
     out = [r"\begin{longtable}{llrr}",
            r"\caption{Hazard ratios (posterior means, two seeds averaged) in JMbayes2 and "
            rf"jmbayes; up to {MAX_PER_MODEL} per model (all are in the repository).}}"
-           r"\label{tab:hr}\\",
+           r"\label{tab:hrall}\\",
            head + r" \endfirsthead", head + r" \endhead", r"\bottomrule \endlastfoot"]
     for label, e in _models():
         for i, h in enumerate(e["hazard_ratios"][:MAX_PER_MODEL]):
@@ -57,8 +58,9 @@ def hr_table():
 def ext_table():
     head = r"\toprule Model & Parameters & Equivalent & Differ & Largest \\ \midrule"
     out = [r"\begin{longtable}{lrrrr}",
-           r"\caption{Equivalence of jmbayes and JMbayes2 for the further features, two "
-           r"seeds per program. Equivalent: shown equivalent within $\pm 0.1$ / $\pm 0.2$ "
+           r"\caption{Equivalence of jmbayes and JMbayes2 for every model in this paper, "
+           r"judged the same way: two seeds per program (12 chains of 30,000 iterations for the "
+           r"first four models, 8 of 15,000 for the rest). Equivalent: shown equivalent within $\pm 0.1$ / $\pm 0.2$ "
            r"posterior SD. Differ: shown to differ by more than 0.2 SD. Largest: largest "
            r"absolute difference, in posterior SDs.}\label{tab:ext}\\",
            head + r" \endfirsthead", head + r" \endhead", r"\bottomrule \endlastfoot"]

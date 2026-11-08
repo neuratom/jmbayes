@@ -1,12 +1,13 @@
-"""Hazard-ratio figures for the paper.
+"""Hazard-ratio figures for the paper. Every model is shown and compared the same way:
+posterior means and SDs from two seeds per program, averaged.
 
-hr_other_data.png  forest plot, the two data sets other than PBC (aids, prothro): hazard
-                   ratios in JMbayes2 and jmbayes, posterior mean +- 1.96 posterior SD of
-                   the log hazard ratio (R's result files keep means and SDs only, so both
-                   programs use the same interval), two seeds averaged
-hr_scatter.png     (a) every hazard ratio of the 21 further-feature models, jmbayes
-                   against JMbayes2 (two seeds averaged); (b) how close single runs are:
-                   JMbayes2 vs JMbayes2 with another seed, and JMbayes2 vs jmbayes
+forest.png      hazard ratios on the three data sets (PBC main model, AIDS, liver
+                cirrhosis): posterior mean and 95% interval, mean +- 1.96 posterior SD of
+                the log hazard ratio (R's result files keep means and SDs only, so both
+                programs use the same interval)
+hr_scatter.png  (a) every hazard ratio of every model, jmbayes against JMbayes2; (b) how
+                close single runs are: JMbayes2 vs itself with another seed, and JMbayes2
+                vs jmbayes
 
 Usage: python hr_figures.py
 """
@@ -29,14 +30,18 @@ plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 9, "axes.edgecol
                      "axes.spines.top": False, "axes.spines.right": False,
                      "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.6})
 
-OTHER = {
-    "aids": ("AIDS data (467 patients)",
-             {"drugddI": "Didanosine vs zalcitabine", "prevOIAIDS": "Previous AIDS diagnosis",
-              "value(CD4)": "sqrt(CD4) (per unit)"}),
-    "prothro": ("Liver cirrhosis data (488 patients)",
-                {"treatprednisone": "Prednisone vs placebo",
-                 "value(pro)": "Prothrombin index (per unit)"}),
-}
+FOREST = [
+    ("main", "(a) PBC (312 patients), main model",
+     {"sexfemale": "Female sex", "value(log(serBilir))": "log serum bilirubin (per unit)",
+      "value(prothrombin)": "Prothrombin time (per second)",
+      "value(ascites)": "Ascites (per unit log-odds)"}),
+    ("aids", "(b) AIDS (467 patients)",
+     {"drugddI": "Didanosine vs zalcitabine", "prevOIAIDS": "Previous AIDS diagnosis",
+      "value(CD4)": "sqrt(CD4) (per unit)"}),
+    ("prothro", "(c) Liver cirrhosis (488 patients)",
+     {"treatprednisone": "Prednisone vs placebo",
+      "value(pro)": "Prothrombin index (per unit)"}),
+]
 
 
 def _r_rows(run):
@@ -63,10 +68,11 @@ def _load(model):
     return names, r, p
 
 
-def fig_other():
-    fig, axes = plt.subplots(2, 1, figsize=(7.2, 3.6),
-                             gridspec_kw=dict(height_ratios=[3, 2]))
-    for ax, (model, (title, labels)) in zip(axes, OTHER.items()):
+def fig_forest():
+    n = [len(lab) for _, _, lab in FOREST]
+    fig, axes = plt.subplots(len(FOREST), 1, figsize=(7.2, 1.2 + 0.5 * sum(n)),
+                             gridspec_kw=dict(height_ratios=n), sharex=True)
+    for ax, (model, title, labels) in zip(axes, FOREST):
         names, r, p = _load(model)
         ys = np.arange(len(names))[::-1]
         for off, est, col, lab in ((0.14, r, C_R, "JMbayes2 (R)"),
@@ -78,18 +84,19 @@ def fig_other():
                         label=lab if y == ys[0] else None)
         ax.axvline(1, color=INK2, lw=0.8)
         ax.set_xscale("log")
-        ticks = [0.5, 0.75, 1, 1.5, 2, 3]
+        ticks = [0.25, 0.5, 1, 2, 4]
         ax.set_xticks(ticks, [f"{t:g}" for t in ticks])
         ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
-        ax.set_xlim(0.45, 3.4)
+        ax.set_xlim(0.22, 4.4)
         ax.set_yticks(ys, [labels[n] for n in names])
         ax.set_ylim(ys[-1] - 0.5, ys[0] + 0.5)
         ax.grid(axis="y", visible=False)
         ax.set_title(title, loc="left", fontsize=9, color=INK)
-    axes[0].legend(frameon=False, loc="upper right", ncol=2, bbox_to_anchor=(1.0, 1.32))
+    h, lab = axes[0].get_legend_handles_labels()
+    fig.legend(h, lab, frameon=False, loc="upper center", ncol=2)
     axes[-1].set_xlabel("Hazard ratio (log scale), posterior mean and 95% interval")
-    fig.tight_layout()
-    fig.savefig(FIG / "hr_other_data.png", dpi=220)
+    fig.tight_layout(rect=(0, 0, 1, 1 - 0.3 / fig.get_figheight()))
+    fig.savefig(FIG / "forest.png", dpi=220)
     plt.close(fig)
 
 
@@ -113,7 +120,7 @@ def _single_runs():
     return np.array(rr), np.array(rp)
 
 
-MODELS = ["surv", "fam", "tvc", "icens", "crx", "bystr", "rec", "fam2", "fam3", "f8a", "f8b",
+MODELS = ["main", "cr", "surv", "fam", "tvc", "icens", "crx", "bystr", "rec", "fam2", "fam3", "f8a", "f8b",
           "f8c", "tva", "bhw", "bhp", "bhn", "ms", "wts", "pen", "aids", "prothro"]
 
 
@@ -136,7 +143,7 @@ def fig_scatter():
     ax.set_aspect("equal")
     ax.set_xlabel("Hazard ratio, JMbayes2")
     ax.set_ylabel("Hazard ratio, jmbayes")
-    ax.set_title(f"(a) {len(hr)} hazard ratios, {len(MODELS)} models", loc="left",
+    ax.set_title(f"(a) {len(hr)} hazard ratios, all {len(MODELS)} models", loc="left",
                  fontsize=9, color=INK)
     ax = axes[1]
     rr, rp = _single_runs()
@@ -161,7 +168,7 @@ def fig_scatter():
 
 
 if __name__ == "__main__":
-    fig_other()
+    fig_forest()
     hr, rr, rp = fig_scatter()
     for nm, x in (("R vs R", rr), ("R vs jmbayes", rp)):
         print(nm, len(x), "within 1%:", np.mean(x < 1).round(2), "5%:",

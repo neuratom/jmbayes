@@ -1,8 +1,18 @@
 \begin{longtable}{llrr}
-\caption{Hazard ratios (posterior means, two seeds averaged) in JMbayes2 and jmbayes; up to 4 per model (all are in the repository).}\label{tab:hr}\\
+\caption{Hazard ratios (posterior means, two seeds averaged) in JMbayes2 and jmbayes; up to 4 per model (all are in the repository).}\label{tab:hrall}\\
 \toprule Model & Term & JMbayes2 & jmbayes \\ \midrule \endfirsthead
 \toprule Model & Term & JMbayes2 & jmbayes \\ \midrule \endhead
 \bottomrule \endlastfoot
+Main model (PBC, 3 markers) & \texttt{sexfemale} & 0.517 & 0.515 \\
+ & \texttt{value(log(serBilir))} & 1.683 & 1.681 \\
+ & \texttt{value(prothrombin)} & 1.008 & 1.006 \\
+ & \texttt{value(ascites)} & 1.767 & 1.769 \\
+\addlinespace
+Competing risks (PBC) & \texttt{sexfemale [transplanted]} & 2.169 & 2.140 \\
+ & \texttt{sexfemale [dead]} & 0.702 & 0.703 \\
+ & \texttt{value(log(serBilir)) [transplanted]} & 3.658 & 3.644 \\
+ & \texttt{value(log(serBilir)) [dead]} & 3.271 & 3.269 \\
+\addlinespace
 Strata + late entry & \texttt{sexfemale} & 0.811 & 0.809 \\
  & \texttt{value(log(serBilir))} & 2.972 & 2.965 \\
  & \texttt{value(prothrombin)} & 1.203 & 1.203 \\

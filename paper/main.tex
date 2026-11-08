@@ -258,7 +258,7 @@ JMbayes2 was 0.011~SD (largest 0.042), smaller than between two JMbayes2 runs (0
 largest 0.141) and two jmbayes runs (0.018~SD, largest 0.070). All 15 regression
 coefficients led to the same conclusions in both programs (direction, significance at 5\%,
 and whether the 95\% credible interval excludes zero). Table~\ref{tab:hr} and
-Figure~\ref{fig:forest} show the hazard ratios.
+Figure~\ref{fig:forest}a show the hazard ratios.
 
 Fit statistics agreed within run-to-run variation (relative differences below 0.3\%).
 Convergence was also the same: the Gelman--Rubin $\hat R$ \cite{gelman1992} of every
@@ -274,26 +274,30 @@ percentage points; for PBC patient 93, the one-year risk was 0.63 instead of 0.7
 
 \begin{table}[t]
 \centering
-\caption{Hazard ratios (posterior mean, 95\% credible interval) from the same model and
-data. Markers act through their current value.}
+\caption{Hazard ratios from the same model and data: posterior mean and 95\% interval
+(mean $\pm$ 1.96 posterior SD of the log hazard ratio), two seeds averaged per program, as
+in every figure and table of this paper. Markers act through their current value.}
 \label{tab:hr}
 \vspace{4pt}
 \begin{tabular}{lcc}
 \toprule
 Effect on the hazard of death or transplantation & JMbayes2 & jmbayes \\
 \midrule
-Female sex & 0.52 (0.26--1.03) & 0.51 (0.25--1.03) \\
-log serum bilirubin (per unit) & 1.68 (1.18--2.33) & 1.68 (1.18--2.31) \\
-Prothrombin time (per second) & 1.01 (0.79--1.25) & 1.00 (0.78--1.25) \\
-Ascites (per unit log-odds) & 1.77 (1.40--2.39) & 1.77 (1.40--2.40) \\
+Female sex & 0.52 (0.26--1.03) & 0.51 (0.26--1.03) \\
+log serum bilirubin (per unit) & 1.68 (1.20--2.36) & 1.68 (1.20--2.35) \\
+Prothrombin time (per second) & 1.01 (0.80--1.27) & 1.01 (0.79--1.28) \\
+Ascites (per unit log-odds) & 1.77 (1.35--2.31) & 1.77 (1.36--2.31) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.8\linewidth]{figures/forest.png}
-\caption{Hazard ratios with 95\% credible intervals from JMbayes2 and jmbayes.}
+\includegraphics[width=0.85\linewidth]{figures/forest.png}
+\caption{Hazard ratios in JMbayes2 and jmbayes on the three data sets: (a) the main PBC
+model of this section, (b, c) the two other data sets that ship with JMbayes2
+(Section~\ref{sec:other}). Posterior mean and 95\% interval (mean $\pm$ 1.96 posterior SD
+of the log hazard ratio), two seeds averaged per program.}
 \label{fig:forest}
 \end{figure}
 
@@ -347,8 +351,9 @@ than PBC, we also fitted a model to each of two other data sets that ship with J
 CD4 counts and death in 467 HIV patients (\texttt{aids}), and the prothrombin index and
 death in 488 patients with liver cirrhosis (\texttt{prothro}).
 
-Table~\ref{tab:ext} gives the results. No parameter in any of the 21 models was
-shown to differ between the programs. In 16 models all or nearly all parameters were shown
+Table~\ref{tab:ext} gives the results, together with the main model and the competing-risks
+model above, so that every model in this paper is judged the same way. No parameter in any
+of the 21 further models was shown to differ between the programs. In 16 models all or nearly all parameters were shown
 equivalent within $\pm 0.2$ SD; in the other five (competing risks with delayed entry and
 strata, recurrent events, effects per stratum, the beta-binomial model and the multi-state
 model) many were inconclusive, but two runs of the same program differed about
@@ -357,17 +362,18 @@ than to a difference. In the beta-binomial model, for example, the random interc
 the two markers correlate at 0.98, so their associations with the hazard are nearly
 confounded.
 
-Figure~\ref{fig:hrscatter}a compares all 79 hazard ratios of these models (each listed in
-Table~\ref{tab:hr} in the appendix). MCMC estimates carry Monte Carlo error, so even two
-JMbayes2 runs with different seeds do not give identical hazard ratios; the yardstick is
-therefore whether jmbayes differs from JMbayes2 more than JMbayes2 differs from itself.
-It does not (Figure~\ref{fig:hrscatter}b): between single runs, 70\% of hazard ratios
-agreed within 1\% for JMbayes2 against JMbayes2 with another seed, and 72\% for JMbayes2
-against jmbayes (median difference 0.39\% and 0.28\%). The larger differences are in the
+Figure~\ref{fig:hrscatter}a compares all 89 hazard ratios of all 23 models in this paper
+(each listed in Table~\ref{tab:hrall} in the appendix). MCMC estimates carry Monte Carlo
+error, so even two JMbayes2 runs with different seeds do not give identical hazard ratios;
+the yardstick is therefore whether jmbayes differs from JMbayes2 more than JMbayes2
+differs from itself. It does not (Figure~\ref{fig:hrscatter}b): between single runs, 70\%
+of hazard ratios agreed within 1\% for JMbayes2 against itself with another seed, and 74\%
+for JMbayes2 against jmbayes (median difference 0.39\% and 0.26\%). The two distributions
+coincide, so the differences are the Monte Carlo error that any rerun of JMbayes2 shows. The larger differences are in the
 slowly mixing models, where the two programs' own runs also differ, most of all in the
 beta-binomial model, whose associations are nearly confounded.
 
-\paragraph{Other data sets.} The tests above, like the main comparison, use the PBC data.
+\paragraph{Other data sets.}\label{sec:other} The tests above, like the main comparison, use the PBC data.
 To check that agreement does not depend on that data set, we fitted a joint model to each
 of the two other data sets that ship with JMbayes2. In the AIDS data (467 patients
 randomised to didanosine or zalcitabine), the square root of the CD4 count, with a random
@@ -375,13 +381,14 @@ intercept and slope over time, was linked to death, adjusting for drug and a pre
 diagnosis. In the liver cirrhosis data (488 patients randomised to prednisone or placebo),
 the prothrombin index was linked to death, adjusting for treatment. In both, all 22
 parameters were shown equivalent within $\pm 0.2$ SD (18 and 19 within $\pm 0.1$ SD), and
-the hazard ratios agreed to the third decimal (Figure~\ref{fig:hrother}); for example, 1.39
+the hazard ratios agreed to the third decimal (Figure~\ref{fig:forest}b and c, drawn
+and computed exactly as for PBC in panel a); for example, 1.39
 in both programs for didanosine and 0.83 in both for prednisone.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\linewidth]{figures/hr_scatter.png}
-\caption{(a) All hazard ratios of the 21 further-feature models, jmbayes against
+\caption{(a) All hazard ratios of all 23 models, jmbayes against
 JMbayes2 (posterior means, two seeds averaged; the line is equality). (b) Agreement between
 single runs: the share of hazard ratios (y) whose relative difference is at most x, for
 JMbayes2 against itself run with another seed (blue) and JMbayes2 against jmbayes
@@ -389,16 +396,6 @@ JMbayes2 against itself run with another seed (blue) and JMbayes2 against jmbaye
 from itself.}
 \label{fig:hrscatter}
 \end{figure}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.9\linewidth]{figures/hr_other_data.png}
-\caption{Hazard ratios on the two data sets other than PBC, posterior mean and 95\%
-interval (mean $\pm$ 1.96 posterior SD of the log hazard ratio), two seeds averaged per
-program.}
-\label{fig:hrother}
-\end{figure}
-
 The comparisons also found an error in jmbayes: for markers whose density is a difference of
 large log-gamma terms (beta-binomial, negative binomial, beta and gamma), 32-bit rounding
 exceeded the signal at large dispersions, and the beta-binomial dispersion drifted
@@ -580,7 +577,7 @@ A.~Gelman and D.~B. Rubin.
 \end{thebibliography}
 
 \appendix
-\section{Hazard ratios in the further-feature tests}
+\section{Hazard ratios of every model}
 
 \input{hr_table.tex}
 
