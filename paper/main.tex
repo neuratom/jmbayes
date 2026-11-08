@@ -357,11 +357,15 @@ than to a difference. In the beta-binomial model, for example, the random interc
 the two markers correlate at 0.98, so their associations with the hazard are nearly
 confounded.
 
-Figure~\ref{fig:hrscatter} compares all 79 hazard ratios of these models (each listed in
-Table~\ref{tab:hr} in the appendix): 78\% agree within 1\% and 92\% within 5\%. The
-largest differences (6--23\%) are in the beta-binomial model and the velocity-and-area
-model, where the associations are nearly confounded and two runs of the same program also
-differ; in posterior SDs these differences are at most 0.24 (Table~\ref{tab:ext}).
+Figure~\ref{fig:hrscatter}a compares all 79 hazard ratios of these models (each listed in
+Table~\ref{tab:hr} in the appendix). MCMC estimates carry Monte Carlo error, so even two
+JMbayes2 runs with different seeds do not give identical hazard ratios; the yardstick is
+therefore whether jmbayes differs from JMbayes2 more than JMbayes2 differs from itself.
+It does not (Figure~\ref{fig:hrscatter}b): between single runs, 70\% of hazard ratios
+agreed within 1\% for JMbayes2 against JMbayes2 with another seed, and 72\% for JMbayes2
+against jmbayes (median difference 0.39\% and 0.28\%). The larger differences are in the
+slowly mixing models, where the two programs' own runs also differ, most of all in the
+beta-binomial model, whose associations are nearly confounded.
 
 \paragraph{Other data sets.} The tests above, like the main comparison, use the PBC data.
 To check that agreement does not depend on that data set, we fitted a joint model to each
@@ -377,9 +381,12 @@ in both programs for didanosine and 0.83 in both for prednisone.
 \begin{figure}[t]
 \centering
 \includegraphics[width=\linewidth]{figures/hr_scatter.png}
-\caption{All hazard ratios of the 21 further-feature models, jmbayes against JMbayes2
-(left; the line is equality), and their relative differences (right). Posterior means, two
-seeds averaged per program.}
+\caption{(a) All hazard ratios of the 21 further-feature models, jmbayes against
+JMbayes2 (posterior means, two seeds averaged; the line is equality). (b) Agreement between
+single runs: the share of hazard ratios (y) whose relative difference is at most x, for
+JMbayes2 against itself run with another seed (blue) and JMbayes2 against jmbayes
+(orange). The curves coincide: jmbayes differs from JMbayes2 no more than JMbayes2 differs
+from itself.}
 \label{fig:hrscatter}
 \end{figure}
 

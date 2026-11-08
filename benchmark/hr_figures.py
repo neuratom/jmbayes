@@ -4,8 +4,9 @@ hr_other_data.png  forest plot, the two data sets other than PBC (aids, prothro)
                    ratios in JMbayes2 and jmbayes, posterior mean +- 1.96 posterior SD of
                    the log hazard ratio (R's result files keep means and SDs only, so both
                    programs use the same interval), two seeds averaged
-hr_scatter.png     every hazard ratio of the 21 further-feature models, jmbayes against
-                   JMbayes2 (from <model>_equivalence.json, compare_cr.py)
+hr_scatter.png     (a) every hazard ratio of the 21 further-feature models, jmbayes
+                   against JMbayes2 (two seeds averaged); (b) how close single runs are:
+                   JMbayes2 vs JMbayes2 with another seed, and JMbayes2 vs jmbayes
 
 Usage: python hr_figures.py
 """
@@ -92,17 +93,37 @@ def fig_other():
     plt.close(fig)
 
 
+def _single_runs():
+    """|% difference| of each hazard ratio between single runs: JMbayes2 vs JMbayes2 with
+    another seed, and JMbayes2 vs jmbayes with the same seed number."""
+    def r_means(run):
+        return np.array([x for b in run["stats"] if b["block"] in ("gammas", "alphas")
+                         for x in np.atleast_1d(b["Mean"]).astype(float)])
+
+    def p_means(run):
+        return np.array([r["Mean"] for k in ("gammas", "alphas") for r in run[k]])
+    rr, rp = [], []
+    for key in MODELS:
+        R = [r_means(json.loads((HERE / f"R_{key}_seed{s}.json").read_text()))
+             for s in (123, 456)]
+        P = [p_means(json.loads((HERE / f"PY_{key}_seed{s}.json").read_text()))
+             for s in (123, 456)]
+        rr += list(100 * np.abs(np.expm1(R[1] - R[0])))
+        rp += [*100 * np.abs(np.expm1(P[0] - R[0])), *100 * np.abs(np.expm1(P[1] - R[1]))]
+    return np.array(rr), np.array(rp)
+
+
+MODELS = ["surv", "fam", "tvc", "icens", "crx", "bystr", "rec", "fam2", "fam3", "f8a", "f8b",
+          "f8c", "tva", "bhw", "bhp", "bhn", "ms", "wts", "pen", "aids", "prothro"]
+
+
 def fig_scatter():
     hr = []
-    for f in sorted(HERE.glob("*_equivalence.json")):
-        if f.stem.split("_")[0] in ("cr",):          # the main paper's competing-risks run
-            continue
-        e = json.loads(f.read_text())
-        if "hazard_ratios" in e:
-            hr += [(h["R"], h["Python"]) for h in e["hazard_ratios"]]
+    for key in MODELS:
+        e = json.loads((HERE / f"{key}_equivalence.json").read_text())
+        hr += [(h["R"], h["Python"]) for h in e["hazard_ratios"]]
     hr = np.array(hr)
-    hr = hr[(hr > 0).all(1)]
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.2), gridspec_kw=dict(width_ratios=[1, 1]))
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.2))
     ax = axes[0]
     lo, hi = hr.min() / 1.5, hr.max() * 1.5
     ax.plot([lo, hi], [lo, hi], color=INK2, lw=0.8, zorder=1)
@@ -115,26 +136,33 @@ def fig_scatter():
     ax.set_aspect("equal")
     ax.set_xlabel("Hazard ratio, JMbayes2")
     ax.set_ylabel("Hazard ratio, jmbayes")
-    ax.set_title(f"{len(hr)} hazard ratios, 21 models", loc="left", fontsize=9, color=INK)
+    ax.set_title(f"(a) {len(hr)} hazard ratios, {len(MODELS)} models", loc="left",
+                 fontsize=9, color=INK)
     ax = axes[1]
-    rel = 100 * (hr[:, 1] / hr[:, 0] - 1)
-    ax.hist(rel, bins=np.arange(-25, 25.5, 1), color=C_PY, edgecolor="white", linewidth=0.6)
-    ax.axvline(0, color=INK2, lw=0.8)
-    ax.set_xlabel("jmbayes vs JMbayes2, % difference")
-    ax.set_ylabel("Hazard ratios")
-    ax.grid(axis="x", visible=False)
-    inside = np.mean(np.abs(rel) < 1) * 100
-    ax.set_title(f"{inside:.0f}% within 1%", loc="left", fontsize=9, color=INK)
+    rr, rp = _single_runs()
+    grid = np.logspace(-3, 2.3, 400)
+    for x, col, lab in ((rr, C_R, "JMbayes2 vs itself (other seed)"),
+                        (rp, C_PY, "JMbayes2 vs jmbayes")):
+        ax.plot(grid, [np.mean(x <= g) * 100 for g in grid], color=col, lw=2, label=lab)
+    ax.set_xscale("log")
+    ticks = [0.01, 0.1, 1, 10, 100]
+    ax.set_xticks(ticks, [f"{t:g}%" for t in ticks])
+    ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+    ax.set_xlim(1e-3, 200)
+    ax.set_ylim(0, 101)
+    ax.set_xlabel("Difference between two single runs (|%|)")
+    ax.set_ylabel("Hazard ratios within it (%)")
+    ax.set_title("(b) Agreement between runs", loc="left", fontsize=9, color=INK)
+    ax.legend(frameon=False, loc="upper left", fontsize=8, handlelength=1.0, borderaxespad=0.2)
     fig.tight_layout()
     fig.savefig(FIG / "hr_scatter.png", dpi=220)
     plt.close(fig)
-    return hr, rel
+    return hr, rr, rp
 
 
 if __name__ == "__main__":
     fig_other()
-    hr, rel = fig_scatter()
-    print(len(hr), "hazard ratios; |diff| < 1%:", np.mean(np.abs(rel) < 1),
-          "< 5%:", np.mean(np.abs(rel) < 5), "max %:", np.abs(rel).max().round(1))
-    big = np.argsort(-np.abs(rel))[:6]
-    print("largest:", [(round(hr[i, 0], 3), round(hr[i, 1], 3), round(rel[i], 1)) for i in big])
+    hr, rr, rp = fig_scatter()
+    for nm, x in (("R vs R", rr), ("R vs jmbayes", rp)):
+        print(nm, len(x), "within 1%:", np.mean(x < 1).round(2), "5%:",
+              np.mean(x < 5).round(2), "median:", np.median(x).round(2))
