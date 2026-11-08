@@ -44,7 +44,11 @@ from jmbayes.sampler import JointModelSampler
 _FAMILIES = set(FAMILIES)
 _ALIASES = {"negative binomial": "negative_binomial", "negative.binomial": "negative_binomial",
             "student's-t": "student_t", "student's t": "student_t", "students_t": "student_t",
-            "student t": "student_t", "student-t": "student_t", "t": "student_t"}
+            "student t": "student_t", "student-t": "student_t", "t": "student_t",
+            "students.t": "student_t", "beta.fam": "beta", "gamma.fam": "gamma",
+            "unit lindley": "unit_lindley", "unit.lindley": "unit_lindley",
+            "censored normal": "censored_normal", "censored.normal": "censored_normal",
+            "beta binomial": "beta_binomial", "beta.binomial": "beta_binomial"}
 
 
 def _family(name: str) -> str:
@@ -69,9 +73,19 @@ class Marker:
     random:    random effects per patient besides the intercept, e.g. year (random
                intercept and slope); None = random intercept only
     family:    "gaussian" (linear mixed model), "binomial" (logistic), "poisson" (counts,
-               log link), "negative_binomial" (overdispersed counts, log link) or
-               "student_t" (continuous with heavy tails, robust to outliers)
+               log link), "negative_binomial" (overdispersed counts, log link),
+               "student_t" (continuous with heavy tails, robust to outliers), "beta"
+               (proportions in (0, 1), logit link), "gamma" (positive, skewed; log link),
+               "unit_lindley" (proportions in (0, 1), logit link, no extra parameter),
+               "censored_normal" (values with detection limits) or "beta_binomial"
+               (overdispersed successes out of trials, logit link)
     df:        degrees of freedom of "student_t" (required, as in JMbayes2; e.g. 4)
+    trials:    "binomial" / "beta_binomial": column (or number) with the number of
+               trials of each measurement; the marker is then the number of successes
+               (cbind(successes, failures) in R). Default: one trial (0/1 marker).
+    censoring: "censored_normal": column coded 0 (observed), 1 (left-censored: the true
+               value is at most the recorded one, e.g. below a detection limit) or
+               2 (right-censored: at least the recorded one)
     association: how the marker enters the hazard, any of "value" (current value),
                "slope" (current rate of change), "area" (average from 0 to t)
     uncorrelated: True for independent random effects (R's "||")
@@ -84,9 +98,20 @@ class Marker:
     uncorrelated: bool = False
     transform: str | None = None
     df: float | None = None
+    trials: object = None
+    censoring: str | None = None
 
     def __post_init__(self):
         self.family = _family(self.family)
+        if self.trials is not None and self.family not in ("binomial", "beta_binomial"):
+            raise ValueError("trials= is only used with families 'binomial' and "
+                             "'beta_binomial'")
+        if self.family == "censored_normal":
+            if not isinstance(self.censoring, str):
+                raise ValueError("family 'censored_normal' needs censoring= (a column "
+                                 "coded 0 observed, 1 left-censored, 2 right-censored)")
+        elif self.censoring is not None:
+            raise ValueError("censoring= is only used with family 'censored_normal'")
         if self.family == "student_t":
             if self.df is None or not float(self.df) > 0:
                 raise ValueError("family 'student_t' needs its degrees of freedom, e.g. "
@@ -112,6 +137,10 @@ class Marker:
     def name(self) -> str:
         return self.response.name
 
+    @property
+    def aux(self):
+        return self.trials if self.trials is not None else self.censoring
+
 
 @dataclass
 class Event:
@@ -120,16 +149,29 @@ class Event:
     time:       follow-up time column (same scale as the visit times)
     event:      event indicator column, coded 0/1; or, for competing risks, a column
                 naming what happened (e.g. "alive", "transplanted", "dead")
-    covariates: baseline covariates, e.g. sex, ["sex", "age"] or var("sex") * var("age")
+    covariates: covariates, e.g. sex, ["sex", "age"] or var("sex") * var("age"); None for
+                a model without covariates. With several rows per patient (start=) they
+                may change over time (each row holds the values for its interval)
     censored:   competing risks: the value of `event` that means no event (e.g. "alive").
                 Every other value is a cause, with its own baseline hazard, its own
                 covariate effects and its own marker associations (cause-specific
                 hazards, as with crisk_setup() and strata(CR) in JMbayes2).
-    start:      delayed entry (left truncation): column with the time each patient
-                entered the study, on the same scale as `time`; a patient counts as at
-                risk only from then on (Surv(start, time, event) in R)
+    start:      start of each row's risk interval (Surv(start, time, event) in R). With
+                one row per patient it is the entry time (delayed entry / left
+                truncation): at risk only from then on. Patients may also have several
+                rows (counting-process data), e.g. for covariates that change over time
+                or for recurrent events
     strata:     column whose groups (e.g. hospital) each get their own baseline hazard,
                 with the covariate and marker effects shared (strata() in R)
+    by_strata:  also give each stratum its own covariate effects and marker associations
+                (like (x + z):strata(s) and value(y):strata in R)
+    time2:      interval censoring (Surv(time, time2, event, type = "interval")): the
+                event column is then coded 0 right-censored at time, 1 event at time,
+                2 left-censored (event before time), 3 event between time and time2
+    recurrent:  "gap" or "calendar": recurrent events with a frailty, as
+                jm(..., recurrent = ). Needs start= (rows per risk interval) and strata=,
+                the first stratum being the recurrent event and any further strata
+                terminal events (see rc_setup())
     """
     time: str
     event: str
@@ -137,14 +179,26 @@ class Event:
     censored: object = None
     start: str | None = None
     strata: str | None = None
+    by_strata: bool = False
+    time2: str | None = None
+    recurrent: str | None = None
 
     def __post_init__(self):
         self.covariates = as_terms(self.covariates).without_intercept()
-        if not self.covariates.terms:
-            raise NotImplementedError("a survival model without covariates is not supported yet")
-        if self.censored is not None and (self.start or self.strata):
-            raise NotImplementedError("competing risks together with start= or strata= are "
-                                      "not supported yet")
+        if self.by_strata and not self.strata:
+            raise ValueError("by_strata=True needs strata=")
+        if self.recurrent is not None:
+            if self.recurrent not in ("gap", "calendar"):
+                raise ValueError("recurrent must be 'gap' or 'calendar'")
+            if not (self.start and self.strata):
+                raise ValueError("recurrent events need start= (one row per risk "
+                                 "interval) and strata= (recurrent event first, then "
+                                 "terminal events); rc_setup() builds such data")
+        if self.time2 and (self.start or self.censored is not None or self.recurrent):
+            raise NotImplementedError("interval censoring together with start=, "
+                                      "competing risks or recurrent events")
+        if self.recurrent and self.censored is not None:
+            raise NotImplementedError("recurrent events together with competing risks")
 
 
 @dataclass
@@ -176,7 +230,8 @@ class JointModel:
             n_chains: int = 3, seed: int = 123, device: str | None = None,
             base_hazard_segments: int = 9, Bsplines_degree: int = 2,
             initial_fits: dict | None = None, dtype: str = "float32",
-            save_loglik: bool = False, verbose: bool = True) -> "JointModelFit":
+            save_loglik: bool = False, marginal_stats: bool = True,
+            verbose: bool = True) -> "JointModelFit":
         """Fit by MCMC, with the same priors and sampler as JMbayes2::jm().
 
         visits:   one row per measurement (id, visit time, markers, covariates)
@@ -196,12 +251,17 @@ class JointModel:
                   iterations in float32). Use it for checks that need every draw, such as
                   PSIS-LOO and its Pareto-k diagnostic.
         initial_fits: optional separate fits exported from R (benchmark/export_initfits.R)
+        marginal_stats: also compute the marginal DIC, WAIC and LPML (random effects
+                  integrated out by a Laplace approximation, as JMbayes2), in
+                  fit.marginal_fit_statistics. Costs one extra likelihood evaluation per
+                  kept draw.
         """
         return _fit(self, visits, patients, n_iter=n_iter, n_burnin=n_burnin, n_thin=n_thin,
                     n_chains=n_chains, seed=seed, device=device,
                     base_hazard_segments=base_hazard_segments,
                     Bsplines_degree=Bsplines_degree, initial_fits=initial_fits,
-                    dtype=dtype, save_loglik=save_loglik, verbose=verbose)
+                    dtype=dtype, save_loglik=save_loglik, marginal_stats=marginal_stats,
+                    verbose=verbose)
 
 
 # =========================================================== R-style strings
@@ -214,21 +274,26 @@ class Longitudinal:
              "||" for uncorrelated random effects, e.g. "~ year || id"
     family:  "gaussian", "binomial", "poisson", "negative_binomial" or "student_t"
     df:      degrees of freedom for "student_t"
+    trials, censoring: as in Marker
     """
     formula: str
     random: str
     family: str = "gaussian"
     df: float | None = None
+    trials: object = None
+    censoring: str | None = None
 
     def __post_init__(self):
         self.response, self.fixed = fm.parse_formula(self.formula)
         self.random_terms, self.id_var, self.uncorrelated = fm.parse_random(self.random)
-        self.family = Marker(self.response, family=self.family, df=self.df).family
+        self.family = Marker(self.response, family=self.family, df=self.df,
+                             trials=self.trials, censoring=self.censoring).family
 
     def to_marker(self, association=("value",)) -> Marker:
         return Marker(self.response, fixed=self.fixed, random=self.random_terms,
                       family=self.family, association=association,
-                      uncorrelated=self.uncorrelated, df=self.df)
+                      uncorrelated=self.uncorrelated, df=self.df, trials=self.trials,
+                      censoring=self.censoring)
 
 
 @dataclass
@@ -236,33 +301,45 @@ class Survival:
     """The event-time sub-model written as an R formula, like coxph().
 
     formula: e.g. "Surv(years, status2) ~ sex + age"; the event column must be 0/1.
-             "Surv(entry, years, status2) ~ ..." for delayed entry, "+ strata(x)" for a
-             baseline hazard per group of x
-    data:    one row per patient
+             "Surv(entry, years, status2) ~ ..." for delayed entry or several rows per
+             patient, "Surv(time, time2, status, type = 'interval') ~ ..." for interval
+             censoring (status 0-3), "+ strata(x)" for a baseline hazard per group of x,
+             "(sex + age):strata(x)" for effects per group too
+    data:    one row per patient (or per risk interval with Surv(start, stop, event))
+    recurrent: "gap" or "calendar" for recurrent events (see Event)
     """
     formula: str
     data: pd.DataFrame
+    recurrent: str | None = None
 
     def __post_init__(self):
-        (self.time, self.event, self.covariates, self.start,
-         self.strata) = fm.parse_surv(self.formula)
-        _check_event(self.data, self.event)
+        d = fm.parse_surv_full(self.formula)
+        self.time, self.event, self.covariates = d["time"], d["event"], d["covariates"]
+        self.start, self.strata, self.time2 = d["start"], d["strata"], d["time2"]
+        self.by_strata = d["by_strata"]
+        _check_event(self.data, self.event, interval=bool(self.time2))
 
     def to_event(self) -> Event:
         return Event(self.time, self.event, self.covariates, start=self.start,
-                     strata=self.strata)
+                     strata=self.strata, by_strata=self.by_strata, time2=self.time2,
+                     recurrent=self.recurrent)
 
 
-def _check_event(df, col):
+def _check_event(df, col, interval=False):
     if col not in df:
         raise ck.DataError(f"event column '{col}' not found in the patients data")
+    if interval:
+        if not set(pd.unique(df[col].dropna())) <= {0, 1, 2, 3}:
+            raise ck.DataError(f"event column '{col}' must be coded 0-3 for interval "
+                               "censoring (0 right, 1 event, 2 left, 3 interval)")
+        return
     if not set(pd.unique(df[col].dropna())) <= {0, 1}:
         raise ck.DataError(f"event column '{col}' must be coded 0/1 "
                            "(e.g. create it with (df.status != 'alive').astype(int))")
 
 
 def _marker_specs(model):
-    return [(m.response, [*m.fixed.variables(), *m.random.variables()], m.family)
+    return [(m.response, [*m.fixed.variables(), *m.random.variables()], m.family, m.aux)
             for m in model.markers]
 
 
@@ -276,6 +353,9 @@ class JointModelFit:
     timing: dict
     random_effects_mean: np.ndarray
     loglik: np.ndarray | None = field(default=None, repr=False)
+    marginal_fit_statistics: dict | None = None
+    """DIC, pD, WAIC, LPML with the random effects integrated out (JMbayes2's
+    fit_stats$marginal); fit_statistics holds the conditional ones."""
     """Log-likelihood of each patient at every iteration after burn-in, shape
     (chains, iterations, patients), patients in the order of .patient_ids. Only kept
     with fit(..., save_loglik=True); None otherwise."""
@@ -298,8 +378,15 @@ class JointModelFit:
         return self._tables[block]
 
     def survival_table(self) -> pd.DataFrame:
-        """Survival sub-model: covariates and association parameters (log-hazard scale)."""
-        return pd.concat([self._table("gammas"), self._table("alphas")])
+        """Survival sub-model: covariates and association parameters (log-hazard scale);
+        with recurrent events also the frailty association with each terminal event
+        (frailty:<stratum>) and the frailty SD (sigma_frailty), as summary.jm()."""
+        parts = [self._table("gammas"), self._table("alphas")]
+        if "alphaF" in self.blocks and len(self.md.strata_levels or []) > 1:
+            parts.append(self._table("alphaF"))
+        if "sigmaF" in self.blocks:
+            parts.append(self._table("sigmaF"))
+        return pd.concat(parts)
 
     def hazard_ratios(self) -> pd.DataFrame:
         """Hazard ratios with 95% credible intervals and tail probabilities.
@@ -309,7 +396,7 @@ class JointModelFit:
         the marker on the scale of its model (e.g. log bilirubin, or log-odds for a
         binomial outcome).
         """
-        t = self.survival_table()
+        t = self.survival_table().drop(index="sigma_frailty", errors="ignore")
         return pd.DataFrame({"HR": np.exp(t["Mean"]), "2.5%": np.exp(t["2.5%"]),
                              "97.5%": np.exp(t["97.5%"]), "P": t["P"]}, index=t.index)
 
@@ -361,7 +448,11 @@ class JointModelFit:
         for o in md.outcomes:
             print(f"  {o.name}: {len(o.y)} observations ({o.family})")
         fs = self.fit_statistics
-        print("\nConditional fit statistics:  " +
+        mfs = self.marginal_fit_statistics
+        if mfs:
+            print("\nMarginal fit statistics:     " +
+                  "  ".join(f"{k} {mfs[k]:.2f}" for k in ("DIC", "WAIC", "LPML")))
+        print(("" if mfs else "\n") + "Conditional fit statistics:  " +
               "  ".join(f"{k} {fs[k]:.2f}" for k in ("DIC", "WAIC", "LPML")))
         print("\nSurvival outcome (log hazard ratios):")
         print(fmt(out["survival"]))
@@ -559,14 +650,15 @@ def jm(survival: Survival, longitudinal: list[Longitudinal] | Longitudinal,
 
 def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_chains, seed,
          device, base_hazard_segments, Bsplines_degree, initial_fits, dtype, verbose,
-         save_loglik=False):
+         save_loglik=False, marginal_stats=True):
     dt = _DTYPES.get(str(dtype).replace("torch.", ""))
     if dt is None:
         raise ValueError(f"dtype must be 'float64' or 'float32', got {dtype!r} (16-bit "
                          "formats are too coarse for MCMC acceptance decisions)")
-    ck.check_patients(patients, model.id, model.event.time, model.event.event,
-                      model.event.covariates.variables(), censored=model.event.censored,
-                      start=model.event.start, strata=model.event.strata)
+    ev = model.event
+    ck.check_patients(patients, model.id, ev.time, ev.event, ev.covariates.variables(),
+                      censored=ev.censored, start=ev.start, strata=ev.strata,
+                      time2=ev.time2, recurrent=ev.recurrent)
     causes = ck.event_causes(patients[model.event.event], model.event.censored)
     ck.check_visits(visits, model.id, model.time, _marker_specs(model))
     ck.check_same_patients(visits, patients, model.id)
@@ -580,13 +672,14 @@ def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_cha
         visits, patients,
         long_models=[dict(response=m.response, fixed=m.fixed, random=m.random,
                           family=m.family, forms=m.association, uncorrelated=m.uncorrelated,
-                          df=m.df)
+                          df=m.df, aux=m.aux)
                      for m in model.markers],
         which_independent=model.independent,
         surv=dict(time=model.event.time, event=model.event.event,
                   covariates=model.event.covariates, causes=causes,
                   censored=model.event.censored, start=model.event.start,
-                  strata=model.event.strata),
+                  strata=model.event.strata, by_strata=model.event.by_strata,
+                  time2=model.event.time2, recurrent=model.event.recurrent),
         id_var=model.id, time_var=model.time, base_hazard_segments=base_hazard_segments,
         Bsplines_degree=Bsplines_degree, initial_fits=initial_fits)
     t_setup = time.perf_counter() - t0
@@ -607,12 +700,17 @@ def _fit(model: JointModel, visits, patients, *, n_iter, n_burnin, n_thin, n_cha
         warnings.warn("float32 sampling produced invalid values (e.g. a covariance that is "
                       "numerically singular); refitting in float64", RuntimeWarning)
         dt = torch.float64
+    t0 = time.perf_counter()
     ll_mean = sm.loglik_at_means(smp, md, blocks, out)
     fs = sm.fit_stats(out["fitstats_acc"], out["n_keep"], ll_mean)
+    mfs = (sm.marginal_fit_stats(smp, md, blocks, out, ll_mean) if marginal_stats
+           else None)
+    t_stats = time.perf_counter() - t0
     return JointModelFit(
-        md=md, blocks=blocks, fit_statistics=fs,
+        md=md, blocks=blocks, fit_statistics=fs, marginal_fit_statistics=mfs,
         settings=dict(n_iter=n_iter, n_burnin=n_burnin, n_thin=n_thin, n_chains=n_chains,
                       seed=seed, dtype=str(dt).replace("torch.", "")),
-        timing=dict(setup=t_setup, mcmc=out["elapsed"], device=out["device"],
+        timing=dict(setup=t_setup, mcmc=out["elapsed"], fit_statistics=t_stats,
+                    device=out["device"],
                     gpu_peak_mb=out["gpu_peak_mb"]),
         random_effects_mean=out["mean_b"].mean(0), loglik=out.get("loglik"))

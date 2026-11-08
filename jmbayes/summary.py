@@ -119,6 +119,11 @@ def collect(md: ModelData, out: dict, n_thin=1):
     blocks["tau_bs_gammas"] = (sw(out["tau_bs_gammas"]),
                                ["tau_bs_gammas"] if n_tau == 1
                                else [f"tau_bs_gammas_{k + 1}" for k in range(n_tau)])
+    if "sigmaF" in out:
+        blocks["sigmaF"] = (sw(out["sigmaF"]), ["sigma_frailty"])
+        lev = md.strata_levels or []
+        blocks["alphaF"] = (sw(out["alphaF"]), [f"frailty:{v}" for v in lev[1:]]
+                            or ["frailty"])
     C, S = blocks["gammas"][0].shape[:2]
     Dv, Dn = build_D(sw(out["sds"]).reshape(C * S, -1), sw(out["L"]).reshape(C * S, -1),
                      md.upper_part, md.q, [tuple(z) for z in md.ind_zero_D])
@@ -144,10 +149,63 @@ def table(draws, names):
 
 # ---- fit statistics from the streamed accumulators ------------------------------
 
-def loglik_at_means(sampler, md: ModelData, blocks, out):
-    """logLik_jm(): per-subject log-likelihood at the posterior means."""
-    t = sampler.t
-    mean = lambda k: blocks[k][0].reshape(-1, blocks[k][0].shape[-1]).mean(0)  # noqa: E731
+def _lower_to_full(Dl, q):
+    rows, cols = np.tril_indices(q)
+    order = np.lexsort((rows, cols))
+    D = np.zeros((*Dl.shape[:-1], q, q))
+    D[..., rows[order], cols[order]] = Dl
+    return D + np.swapaxes(np.tril(D, -1), -1, -2)
+
+
+def _sds_L(D):
+    """sds and upper Cholesky factor of the correlation matrix (R = L'L), batched."""
+    sds = np.sqrt(np.einsum("...ii->...i", D))
+    R = D / (sds[..., :, None] * sds[..., None, :])
+    return sds, np.swapaxes(np.linalg.cholesky(R), -1, -2)
+
+
+def loglik_params(sampler, P: dict, b):
+    """logLik_jm_stripped(): per-patient log-likelihood (longitudinal + survival +
+    random effects, + frailty with recurrent events) for a batch of parameter values
+    on the sampler's scale. P: betas (B, p), sigmas (B, J), bs, gammas, alphas, sds,
+    L, and with recurrent events frailty (B, n), sigmaF (B,), alphaF (B, k); b: (B or 1,
+    n, q). Returns (B, n) float64."""
+    s_ = sampler
+    t = s_.t
+    T = {k: (v if torch.is_tensor(v) else t(v)) for k, v in P.items()}
+    B = T["betas"].shape[0]
+    bb = (b if torch.is_tensor(b) else t(b)).expand(B, -1, -1)
+    C0 = s_.C
+    s_.C = B
+    try:
+        ll_long = sum(s_.ll_long_subj(j, s_.eta_long(j, T["betas"], bb), T["sigmas"][:, j])
+                      for j in range(s_.n_out))
+        etaH = [s_.eta_surv(c, T["betas"], bb, "H") for c in range(s_.A)]
+        etah = [s_.eta_surv(c, T["betas"], bb, "h") for c in range(s_.A)]
+        z = torch.zeros(B, 1, 0, dtype=s_.dt, device=s_.dev)
+        WlH = torch.stack([s_.wlong_col(c, e) for c, e in enumerate(etaH)], -1) if etaH else z
+        Wlh = torch.stack([s_.wlong_col(c, e) for c, e in enumerate(etah)], -1) if etah else z
+        a = T["alphas"][:, None, :]
+        FH = Fh = None
+        if s_.rec:
+            FH, Fh = s_.frail_terms(T["frailty"], T["sigmaF"], T["alphaF"])
+        ll_surv = s_.log_surv(T["bs"] @ s_.W0_H.T, T["gammas"] @ s_.W_H.T,
+                              (WlH * a).sum(-1), T["bs"] @ s_.W0_h.T,
+                              T["gammas"] @ s_.W_h.T, (Wlh * a).sum(-1), FH, Fh)
+        ll_re = s_.log_re(bb, T["L"], T["sds"])
+        out = ll_long + ll_surv + ll_re
+        if s_.rec:
+            out = out - 0.5 * math.log(2 * math.pi) - 0.5 * T["frailty"] ** 2
+    finally:
+        s_.C = C0
+    return out.to(torch.float64)
+
+
+def _mean_params(md: ModelData, blocks, out):
+    """Posterior means on the sampler's scale (as thetas <- statistics$Mean in jm_fit)."""
+    def mean(k):
+        a = blocks[k][0]
+        return a.reshape(a.shape[0] * a.shape[1], -1).mean(0)
     betas = np.zeros(out["betas"].shape[2])
     for j, o in enumerate(md.outcomes):
         bj = mean(f"betas{j + 1}")
@@ -155,39 +213,84 @@ def loglik_at_means(sampler, md: ModelData, blocks, out):
             bj = bj.copy()
             bj[0] += o.Xbar @ bj                 # back to the centred scale of the sampler
         betas[o.fe_cols] = bj
-    sig = out["sigmas"].reshape(-1, out["sigmas"].shape[2]).mean(0)
-    bs = mean("bs_gammas")
-    gam = mean("gammas") * md.W_sds
-    alp = mean("alphas") * md.Wlong_sds
+    sds, L = _sds_L(_lower_to_full(mean("D"), md.q))
+    P = dict(betas=betas, sigmas=out["sigmas"].reshape(-1, out["sigmas"].shape[2]).mean(0),
+             bs=mean("bs_gammas"), gammas=mean("gammas") * md.W_sds,
+             alphas=mean("alphas") * md.Wlong_sds, sds=sds, L=L)
+    if "sigmaF" in out:
+        P.update(sigmaF=np.array(out["sigmaF"].mean()),
+                 alphaF=out["alphaF"].reshape(-1, out["alphaF"].shape[2]).mean(0),
+                 frailty=out["mean_frailty"].mean(0))
+    return {k: np.asarray(v)[None] for k, v in P.items()}
+
+
+def loglik_at_means(sampler, md: ModelData, blocks, out):
+    """logLik_jm(): per-subject log-likelihood at the posterior means."""
+    P = _mean_params(md, blocks, out)
+    b = out["mean_b"].mean(0)[None]
+    return loglik_params(sampler, P, b)[0].cpu().numpy()
+
+
+def posterior_b(out):
+    """Posterior means and covariances of each patient's random effects over all
+    chains (postmeans_b, postvars_b in jm_fit())."""
+    K = out["n_keep"] * out["sum_b"].shape[0]
+    m = out["sum_b"].sum(0) / K
+    V = (out["sum_bb"].sum(0) / K - m[:, :, None] * m[:, None, :]) * K / (K - 1)
+    return m, V
+
+
+def marginal_fit_stats(sampler, md: ModelData, blocks, out, ll_mean_cond, batch=None):
+    """Marginal DIC, WAIC and LPML, as mlogLik_jm() in jm_fit(): for every kept draw the
+    log-likelihood at the posterior means of the random effects plus the Laplace term
+    0.5 (q log 2 pi + log det postvar_i), streamed (no draws x patients table kept)."""
+    mb, V = posterior_b(out)
     q = md.q
-    Dl = mean("D")
-    rows, cols = np.tril_indices(q)
-    order = np.lexsort((rows, cols))
-    D = np.zeros((q, q))
-    D[rows[order], cols[order]] = Dl
-    D = D + np.tril(D, -1).T
-    sds = np.sqrt(np.diag(D))
-    L = np.linalg.cholesky(D / np.outer(sds, sds)).T
-    b = out["mean_b"].mean(0)
-    be, bb = t(betas)[None], t(b)[None]
-    s_ = sampler
-    C0 = s_.C
-    s_.C = 1
-    try:
-        ll_long = sum(s_.ll_long_subj(j, s_.eta_long(j, be, bb), t(sig)[None, j])
-                      for j in range(s_.n_out))
-        etaH = [s_.eta_surv(c, be, bb, "H") for c in range(s_.A)]
-        etah = [s_.eta_surv(c, be, bb, "h") for c in range(s_.A)]
-        WlH = torch.stack([s_.wlong_col(c, e) for c, e in enumerate(etaH)], -1)
-        Wlh = torch.stack([s_.wlong_col(c, e) for c, e in enumerate(etah)], -1)
-        a = t(alp)[None, None, :]
-        ll_surv = s_.log_surv(t(bs)[None] @ s_.W0_H.T, t(gam)[None] @ s_.W_H.T,
-                              (WlH * a).sum(-1), t(bs)[None] @ s_.W0_h.T,
-                              t(gam)[None] @ s_.W_h.T, (Wlh * a).sum(-1))
-        ll_re = s_.log_re(bb, t(L)[None], t(sds)[None])
-    finally:
-        s_.C = C0
-    return (ll_long + ll_surv + ll_re)[0].cpu().numpy()
+    sign, logdet = np.linalg.slogdet(V)
+    const = 0.5 * (q * math.log(2 * math.pi) + logdet)
+    const = np.where(sign > 0, const, np.nan)
+    S, C = out["betas"].shape[:2]
+    flat = lambda a: a.reshape(S * C, *a.shape[2:])  # noqa: E731 (draw-major, chain-minor)
+    Dv, _ = build_D(flat(out["sds"]), flat(out["L"]), md.upper_part, q,
+                    [tuple(z) for z in md.ind_zero_D])
+    sds_all, L_all = _sds_L(_lower_to_full(Dv, q))
+    P_all = dict(betas=flat(out["betas"]), sigmas=flat(out["sigmas"]),
+                 bs=flat(out["bs_gammas"]), gammas=flat(out["gammas"]),
+                 alphas=flat(out["alphas"]), sds=sds_all, L=L_all)
+    if "sigmaF" in out:
+        P_all.update(sigmaF=flat(out["sigmaF"])[:, 0], alphaF=flat(out["alphaF"]),
+                     frailty=flat(out["frailty"]))
+    N = S * C
+    n = md.n
+    if batch is None:
+        pts = max(1, md.W0_H.shape[0] + sum(len(o.y) for o in md.outcomes))
+        batch = int(max(1, min(512, 4e7 // pts)))
+    b_t = sampler.t(mb)[None]
+    c_t = torch.as_tensor(const, dtype=torch.float64, device=sampler.dev)
+    tot = 0.0
+    mean = torch.zeros(n, dtype=torch.float64, device=sampler.dev)
+    m2 = torch.zeros_like(mean)
+    lse_p = torch.full_like(mean, -math.inf)
+    lse_n = torch.full_like(mean, -math.inf)
+    k = 0
+    with torch.no_grad():
+        for a in range(0, N, batch):
+            P = {key: v[a:a + batch] for key, v in P_all.items()}
+            ll = loglik_params(sampler, P, b_t) + c_t                     # (B, n)
+            tot += float(ll.sum())
+            nb = ll.shape[0]                                  # merge batch moments (Chan)
+            bm = ll.mean(0)
+            bM2 = ((ll - bm) ** 2).sum(0)
+            d = bm - mean
+            mean = mean + d * nb / (k + nb)
+            m2 = m2 + bM2 + d * d * k * nb / (k + nb)
+            k += nb
+            lse_p = torch.logaddexp(lse_p, torch.logsumexp(ll, 0))
+            lse_n = torch.logaddexp(lse_n, torch.logsumexp(-ll, 0))
+    acc = dict(sum_tot=np.array([tot]), mean=mean.cpu().numpy()[None],
+               m2=m2.cpu().numpy()[None], lse_pos=lse_p.cpu().numpy()[None],
+               lse_neg=lse_n.cpu().numpy()[None])
+    return fit_stats(acc, N, ll_mean_cond + const)
 
 
 def fit_stats(acc, n_keep, ll_mean_parms):

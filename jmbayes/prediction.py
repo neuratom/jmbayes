@@ -124,53 +124,77 @@ class _NewData:
         # longitudinal measurements
         self.long = []
         for o in md.outcomes:
-            vars_ = sorted({o.response.var, *o.fixed.variables(), *o.random.variables()})
+            ac = getattr(o, "aux_col", None)
+            vars_ = sorted({o.response.var, *o.fixed.variables(), *o.random.variables(),
+                            *([ac] if isinstance(ac, str) else [])})
             ok = d[vars_].notna().all(axis=1).to_numpy()
             dd = d.loc[ok].reset_index(drop=True)
             X = o.fixed.build(dd, o.levels)[0]
             Z = o.random.build(dd, o.levels)[0]
+            aux = (None if ac is None else dd[ac].astype(float).to_numpy()
+                   if isinstance(ac, str) else np.full(len(dd), float(ac)))
             self.long.append(dict(y=o.response.values(dd), X=X - o.Xbar, Z=Z,
-                                  sid=dd["_sid"].to_numpy()))
+                                  sid=dd["_sid"].to_numpy(), aux=aux))
         # survival: designs at the 15 Gauss-Kronrod nodes on [0, u] for every grid time u
         self.m = max(len(g) for g in grids)
         G = np.stack([np.pad(g, (0, self.m - len(g)), mode="edge") for g in grids])
         self.grid, self.grid_len = G, [len(g) for g in grids]
         if sv.get("start"):
-            # delayed entry: integrate from each patient's entry time, so that sampling
-            # the random effects conditions on being event-free from entry to t
-            s0 = last[sv["start"]].astype(float).to_numpy()[:, None]
+            # entry time (or start of the first risk interval): integrate from it, so
+            # that sampling the random effects conditions on being event-free from entry
+            # to t; covariates that change over time are taken from the last row
+            first = d.groupby("_sid", sort=True).head(1).reset_index(drop=True)
+            s0 = np.minimum(first[sv["start"]].astype(float).to_numpy(),
+                            last[sv["start"]].astype(float).to_numpy())[:, None]
             if (s0[:, 0] >= self.t_last).any():
                 raise ValueError(f"newdata: '{sv['start']}' must be before '{sv['time']}'")
-            P = (G - s0) / 2.0
-            nodes = P[..., None] * GK_SK + ((G + s0) / 2.0)[..., None]
         else:
-            P = G / 2.0
-            nodes = P[..., None] * (GK_SK + 1.0)                 # (n, m, 15)
+            s0 = np.zeros((self.n, 1))
+        self.s0 = s0
+        P = (G - s0) / 2.0
+        nodes = P[..., None] * GK_SK + ((G + s0) / 2.0)[..., None]       # (n, m, 15)
         self.log_Pwk = np.log(P)[..., None] + np.log(GK_WK)
         deg = meta["Bsplines_degree"]
-        if md.strata_levels is not None and md.causes is None:
-            # strata: each patient's spline block, with that stratum's knots
-            lev = [str(v) for v in md.strata_levels]
+        self.deg = deg
+        # the user's strata of each patient (index into user_strata_levels)
+        ulev = getattr(md, "user_strata_levels", None)
+        if ulev is None and md.causes is None and md.strata_levels is not None:
+            ulev = md.strata_levels                    # fits saved by 0.6
+        self.n_user = len(ulev) if ulev else 1
+        if ulev:
+            lev = [str(v) for v in ulev]
             vals = last[sv["strata"]].astype(str)
             bad = sorted(set(vals) - set(lev))
             if bad:
                 raise ValueError(f"newdata: unknown '{sv['strata']}' values {bad} "
                                  f"(the model has {lev})")
-            k_of = np.array([lev.index(v) for v in vals])
-            nb0 = len(md.knots_strata[0]) - deg - 1
-            self.W0 = np.zeros((self.n, self.m, 15, nb0 * len(lev)))
-            for i, k in enumerate(k_of):
+            self.k_user = np.array([lev.index(v) for v in vals])
+        else:
+            self.k_user = np.zeros(self.n, int)
+        self.knots_strata = md.knots_strata or [md.knots]
+        if md.causes is None and md.strata_levels is not None:
+            # strata: each patient's spline block, with that stratum's knots
+            nb0 = len(self.knots_strata[0]) - deg - 1
+            self.W0 = np.zeros((self.n, self.m, 15, nb0 * len(md.strata_levels)))
+            for i, k in enumerate(self.k_user):
                 self.W0[i, ..., k * nb0:(k + 1) * nb0] = _bspline_basis(
-                    nodes[i].ravel(), md.knots_strata[k], deg).reshape(self.m, 15, -1)
+                    nodes[i].ravel(), self.knots_strata[k], deg).reshape(self.m, 15, -1)
         else:
             self.W0 = _bspline_basis(nodes.ravel(), md.knots, deg).reshape(self.n, self.m,
                                                                             15, -1)
         W_raw = sv["covariates"].without_intercept().build(last, dict(meta["surv_levels"]))[0]
+        glev = getattr(md, "group_levels", None)
         designer = TimeDesigner(fill_within_subject(d), time_var)
         self.designer = designer
         self.d = d
         self.cr = md.causes is not None
         if not self.cr:
+            if glev is not None:          # by_strata: covariate-major, one block per group
+                G, p0 = len(glev), W_raw.shape[1]
+                Wg = np.zeros((self.n, p0 * G))
+                for j in range(p0):
+                    Wg[np.arange(self.n), j * G + self.k_user] = W_raw[:, j]
+                W_raw = Wg
             self.W = (W_raw - md.W_bar) / md.W_sds               # (n, P)
             Tn = nodes.reshape(self.n, -1)
             self.assoc = []
@@ -178,7 +202,9 @@ class _NewData:
                 for a in o.assoc:
                     Xa = designer.design(a["form"], o.fixed, o.levels, Tn, "nodes", o.Xbar)
                     Za = designer.design(a["form"], o.random, o.levels, Tn, "nodes")
-                    self.assoc.append(dict(j=j, X=Xa, Z=Za))
+                    u = (None if "cause" not in a else
+                         (self.k_user == glev.index(a["cause"])).astype(float))
+                    self.assoc.append(dict(j=j, X=Xa, Z=Za, u=u))
             return
         # competing risks: covariates of each cause's row, standardised as in the fit
         causes = md.causes
@@ -195,13 +221,24 @@ class _NewData:
         s7 = P7[..., None] * GK7_SK + ((G + t0) / 2.0)[..., None]       # (n, m, 7)
         with np.errstate(divide="ignore"):
             self.log_w7 = np.log(P7)[..., None] + np.log(GK7_WK)        # -inf when u = t
-        nodes_s = (s7 / 2.0)[..., None] * (GK_SK + 1.0)                 # (n, m, 7, 15)
+        Ps = (s7 - s0[..., None]) / 2.0
+        nodes_s = Ps[..., None] * GK_SK + ((s7 + s0[..., None]) / 2.0)[..., None]
         with np.errstate(divide="ignore"):
-            self.log_Pwk_s = np.log(s7 / 2.0)[..., None] + np.log(GK_WK)
+            self.log_Pwk_s = np.log(Ps)[..., None] + np.log(GK_WK)
         self.sets = {}
         for key, pts in (("H", nodes), ("h7", s7), ("H7", nodes_s)):
             Tn = pts.reshape(self.n, -1)
-            B = _bspline_basis(Tn.ravel(), md.knots, deg).reshape(*pts.shape, -1)
+            # spline basis of each cause's stratum (cause x the patient's own stratum)
+            B = []
+            for k in range(Kc):
+                Bk = np.zeros((self.n, int(np.prod(pts.shape[1:])),
+                               len(self.knots_strata[0]) - deg - 1))
+                for u in np.unique(self.k_user):
+                    rows = self.k_user == u
+                    Bk[rows] = _bspline_basis(Tn[rows].ravel(),
+                                              self.knots_strata[k * self.n_user + u],
+                                              deg).reshape(rows.sum(), Tn.shape[1], -1)
+                B.append(Bk.reshape(*pts.shape, -1))
             des = {}
             for j, o in enumerate(md.outcomes):
                 for form in dict.fromkeys(a["form"] for a in o.assoc):
@@ -209,6 +246,8 @@ class _NewData:
                         designer.design(form, o.fixed, o.levels, Tn, f"cr_{key}", o.Xbar),
                         designer.design(form, o.random, o.levels, Tn, f"cr_{key}"))
             self.sets[key] = dict(B=B, shape=pts.shape[1:], des=des)
+        # each patient's strata blocks of bs_gammas, per cause
+        self.bs_block = [k * self.n_user + self.k_user for k in range(Kc)]
         self.assoc = [dict(j=j, form=a["form"], cause=causes.index(a["cause"]))
                       for j, o in enumerate(md.outcomes) for a in o.assoc]
 
@@ -219,14 +258,16 @@ class _Engine:
         md = fit.md
         self.md, self.nd = md, nd
         self.dev = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        t = lambda a: torch.as_tensor(np.asarray(a, float), dtype=torch.float64,  # noqa
+        t = lambda a: torch.as_tensor(np.array(a, float), dtype=torch.float64,  # noqa
                                       device=self.dev)
         self.t = t
         self.S = draws["betas"].shape[0]
         self.th = {k: t(v) for k, v in draws.items()}
         self.long = [dict(y=t(L["y"]), X=t(L["X"]), Z=t(L["Z"]),
-                          sid=torch.as_tensor(np.array(L["sid"]), device=self.dev))
-                     for L in nd.long]
+                          sid=torch.as_tensor(np.array(L["sid"]), device=self.dev),
+                          pre=fam.precompute(o.family, t(L["y"]),
+                                             None if L["aux"] is None else t(L["aux"])))
+                     for L, o in zip(nd.long, md.outcomes)]
         self.re = [torch.as_tensor(o.re_cols, device=self.dev) for o in md.outcomes]
         self.fe = [torch.as_tensor(o.fe_cols, device=self.dev) for o in md.outcomes]
         self.Wbar, self.Wisd = t(md.Wlong_bar), 1.0 / t(md.Wlong_sds)
@@ -235,14 +276,16 @@ class _Engine:
         self.cr = nd.cr
         if self.cr:
             self.Kc = len(md.causes)
-            self.nb = self.th["bs"].shape[1] // self.Kc
+            self.nb = self.th["bs"].shape[1] // md.n_strata
+            self.bs_block = [torch.as_tensor(k_, device=self.dev) for k_ in nd.bs_block]
             self.Wg = [(t(W) @ self.th["gammas"].T).T for W in nd.Wc]    # (S, n) per cause
-            self.sets = {k: dict(B=t(v["B"]), shape=v["shape"],
+            self.sets = {k: dict(B=[t(B) for B in v["B"]], shape=v["shape"],
                                  des={jf: (t(X), t(Z)) for jf, (X, Z) in v["des"].items()})
                          for k, v in nd.sets.items()}
             self.log_Pwk = t(nd.log_Pwk)
             return
-        self.assoc = [dict(j=a["j"], X=t(a["X"]), Z=t(a["Z"])) for a in nd.assoc]
+        self.assoc = [dict(j=a["j"], X=t(a["X"]), Z=t(a["Z"]),
+                           u=None if a["u"] is None else t(a["u"])) for a in nd.assoc]
         n, m = nd.n, nd.m
         # baseline part of the log hazard at every node: log P w + W0 bs + W gamma
         base = (t(nd.log_Pwk)[None] + torch.einsum("nmkb,sb->snmk", t(nd.W0), self.th["bs"])
@@ -256,7 +299,7 @@ class _Engine:
             bj = b[:, :, self.re[j]][:, L["sid"], :]
             eta = self.th["betas"][:, self.fe[j]] @ L["X"].T + (L["Z"] * bj).sum(-1)
             ll = fam.log_dens(self.families[j], L["y"], eta, self.th["sigmas"][:, j:j + 1],
-                              self.dfs[j])
+                              self.dfs[j], L["pre"])
             out.index_add_(1, L["sid"], ll)
         return out
 
@@ -284,6 +327,8 @@ class _Engine:
             Z = a["Z"].view(n, m, 15, -1)[:, cols]
             eta = (torch.einsum("nmkp,sp->snmk", X, self.th["betas"][:, self.fe[j]])
                    + torch.einsum("nmkr,snr->snmk", Z, b[:, :, self.re[j]]))
+            if a["u"] is not None:        # group-specific column (by_strata)
+                eta = eta * a["u"][None, :, None, None]
             w = (eta - self.Wbar[c]) * self.Wisd[c]
             a_c = self.th["alphas"][:, c] * (self.Wisd[c] if r_sampling else 1.0)
             lam = lam + a_c[:, None, None, None] * w
@@ -307,9 +352,10 @@ class _Engine:
     def _loghaz(self, etas, key, k, sl=None):
         """log hazard of cause k (standardised parametrisation, as in the sampler)."""
         st = self.sets[key]
-        B = st["B"] if sl is None else st["B"][:, sl]
-        bs_k = self.th["bs"][:, k * self.nb:(k + 1) * self.nb]
-        lam = torch.einsum("n...b,sb->sn...", B, bs_k)
+        B = st["B"][k] if sl is None else st["B"][k][:, sl]
+        # each patient's block of spline coefficients for cause k: (S, n, nb)
+        bs_k = self.th["bs"].view(self.S, -1, self.nb)[:, self.bs_block[k]]
+        lam = torch.einsum("n...b,snb->sn...", B, bs_k)
         lam = lam + self.Wg[k].reshape(*self.Wg[k].shape, *([1] * (lam.dim() - 2)))
         for c, a in enumerate(self.nd.assoc):
             eta = etas[(a["j"], a["form"])]
@@ -403,14 +449,18 @@ def predict(fit, newdata: pd.DataFrame, process: str = "event", times=None,
             draws: str = "spread", r_sampling: bool = False) -> pd.DataFrame:
     md = fit.md
     sv = md.meta["surv"]
+    if getattr(md, "recurrent", None):
+        raise NotImplementedError("predictions for recurrent-event models are not "
+                                  "available (JMbayes2 does not provide them either)")
     from jmbayes import checks as ck
     extra = [sv[k] for k in ("start", "strata") if sv.get(k)]
     ck._missing_report(newdata, [md.meta["id_var"], md.meta["time_var"], sv["time"],
                                  sv["event"], *extra, *sv["covariates"].variables()],
                        "newdata")
     ck.check_visits(newdata, md.meta["id_var"], md.meta["time_var"],
-                    [(o.response, [*o.fixed.variables(), *o.random.variables()], o.family)
-                     for o in md.outcomes], "newdata", require_measured=False)
+                    [(o.response, [*o.fixed.variables(), *o.random.variables()], o.family,
+                      getattr(o, "aux_col", None)) for o in md.outcomes], "newdata",
+                    require_measured=False)
     draws, S = _posterior_draws(fit, n_samples, draws)
     last_times = (newdata.groupby(md.meta["id_var"], sort=False)[sv["time"]].last()
                   .astype(float).to_numpy())

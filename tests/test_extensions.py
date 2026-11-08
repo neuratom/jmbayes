@@ -123,7 +123,7 @@ def test_entry_time_errors(pbc2):
     with pytest.raises(jmb.DataError, match="before the follow-up"):
         model.fit(visits, bad, n_iter=200, n_burnin=100, verbose=False)
     with pytest.raises(NotImplementedError):
-        jmb.Event("years", "status", "sex", censored="alive", start="entry")
+        jmb.Event("years", "status", "sex", time2="t2", start="entry")
 
 
 # ------------------------------------------------------------------ fits

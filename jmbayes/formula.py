@@ -86,27 +86,80 @@ def parse_random(random: str) -> tuple[Terms, str, bool]:
 def parse_surv(formula: str):
     """'Surv(years, status2) ~ sex' -> (time, event, Terms without intercept, start,
     strata); 'Surv(start, stop, event)' gives delayed entry and a 'strata(x)' term a
-    baseline hazard per stratum (start and strata are None otherwise)."""
-    m = re.match(r"^\s*Surv\(\s*(\w+)\s*,\s*(\w+)\s*(?:,\s*(\w+)\s*)?\)\s*~\s*(.+)$",
-                 formula)
-    if not m:
-        raise ValueError("formula should look like 'Surv(time, event) ~ covariates' or "
-                         f"'Surv(start, stop, event) ~ covariates', got {formula!r}")
-    if m.group(3):
-        start, time, event = m.group(1), m.group(2), m.group(3)
+    baseline hazard per stratum (start and strata are None otherwise). See
+    parse_surv_full() for interval censoring and stratum-specific effects."""
+    d = parse_surv_full(formula)
+    return d["time"], d["event"], d["covariates"], d["start"], d["strata"]
+
+
+def parse_surv_full(formula: str) -> dict:
+    """All of a coxph()/survreg() formula that jm() uses:
+
+    Surv(time, event) ~ x                     right censoring
+    Surv(start, stop, event) ~ x              entry times / counting-process rows
+    Surv(time, time2, event, type = "interval") ~ x   interval censoring (event codes
+                                              0 right, 1 event, 2 left, 3 interval)
+    ... + strata(s)                           a baseline hazard per stratum
+    (x + z):strata(s)                         also effects of x and z per stratum
+    """
+    m = re.match(r"^\s*Surv\((.*?)\)\s*~\s*(.+)$", formula)
+    args = [a.strip() for a in m.group(1).split(",")] if m else []
+    kind = None
+    if args and re.match(r"^type\s*=", args[-1]):
+        kind = args.pop().split("=", 1)[1].strip().strip("'\"")
+    if not m or not all(re.match(r"^\w+$", a) for a in args) or len(args) not in (2, 3):
+        raise ValueError("formula should look like 'Surv(time, event) ~ covariates', "
+                         "'Surv(start, stop, event) ~ covariates' or 'Surv(time, time2, "
+                         f"event, type = \"interval\") ~ covariates', got {formula!r}")
+    out = dict(start=None, time2=None, strata=None, by_strata=False)
+    if kind not in (None, "interval", "counting", "right"):
+        raise NotImplementedError(f"Surv(type = {kind!r}) is not supported "
+                                  "(use 'interval' with event codes 0-3)")
+    if kind == "interval":
+        if len(args) != 3:
+            raise ValueError("interval censoring: Surv(time, time2, event, type = 'interval')")
+        out.update(time=args[0], time2=args[1], event=args[2])
+    elif len(args) == 3:
+        out.update(start=args[0], time=args[1], event=args[2])
     else:
-        start, time, event = None, m.group(1), m.group(2)
-    rhs, strata = m.group(4).replace(" ", ""), None
-    sm = re.findall(r"strata\((\w+)\)", rhs)
+        out.update(time=args[0], event=args[1])
+    rhs = m.group(2).replace(" ", "")
+    sm = set(re.findall(r"strata\((\w+)\)", rhs))
     if len(sm) > 1:
-        raise NotImplementedError("only one strata() term is supported")
+        raise NotImplementedError("only one strata variable is supported")
     if sm:
-        strata = sm[0]
-        parts = [p for p in rhs.split("+") if p != f"strata({strata})"]
-        if any("strata(" in p for p in parts):
-            raise NotImplementedError("strata() can only be added as its own term")
+        s = sm.pop()
+        out["strata"] = s
+        parts = []
+        for p in _split_plus(rhs):
+            if p == f"strata({s})":
+                continue
+            if p.endswith(f":strata({s})"):
+                out["by_strata"] = True
+                p = p[: -len(f":strata({s})")]
+                if p.startswith("(") and p.endswith(")"):
+                    parts += _split_plus(p[1:-1])
+                    continue
+            if "strata(" in p:
+                raise NotImplementedError(f"unsupported strata() term {p!r}")
+            parts.append(p)
         rhs = "+".join(parts) or "1"
-    return time, event, parse_rhs(rhs).without_intercept(), start, strata
+    out["covariates"] = parse_rhs(rhs).without_intercept()
+    return out
+
+
+def _split_plus(s: str) -> list:
+    """Split at '+' outside parentheses."""
+    out, depth, cur = [], 0, ""
+    for ch in s:
+        depth += ch == "("
+        depth -= ch == ")"
+        if ch == "+" and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    return [p for p in out + [cur] if p]
 
 
 def parse_functional_forms(text: str) -> dict:

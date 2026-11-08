@@ -92,6 +92,17 @@ Worth raising with the JMbayes2 maintainers.
    AR fit to all chains stacked) understated the real run-to-run error by a factor of about
    1.7 for the README model (measured with independent runs of both programs).
 
+6. **Separate fits that jm() starts from (GLMMadaptive 0.9-7).** jm() takes its starting
+   values and centres some priors (fixed effects, D, sigmas) on the separate mixed-model
+   fits, so when these stop short the joint model's priors move with them. Seen on PBC:
+   Student's t (prothrombin; non-positive-definite Hessian), censored normal (log alkaline
+   phosphatase censored at its 20% quantile: the fit is 550 log-likelihood units below the
+   maximum jmbayes finds), and smaller gaps for the negative binomial, gamma and
+   beta-binomial fits. `beta.binomial()` fails in its EM phase on these data (it works with
+   `control = list(iter_EM = 0)`), and `unit.lindley()` reports that the family is
+   unavailable, although JMbayes2's C++ code has its density. The comparisons therefore
+   start both programs from R's separate fits (`--initial-fits`).
+
 ## Equivalence with JMbayes2 (details in benchmark/ and tests/)
 
 | Model | Parameters equivalent at +-0.2 SD | Median abs. difference R vs Python |
@@ -110,10 +121,9 @@ fitting a different model.
 
 ## Next steps
 
-* More outcome families (beta, Gamma, censored normal, hurdle).
-* Interval censoring, recurrent events, time-varying survival covariates; strata or late
-  entry combined with competing risks.
-* Remaining association forms and transformations; interactions in functional forms.
-* Marginal DIC/WAIC/LPML.
+* Remaining association forms (velocity, acceleration, coefs, Delta) and transformation
+  functions; interactions in functional forms; time-varying coefficients (tv()).
+* Multi-state models, case weights, other baseline-hazard bases, shrinkage priors.
+* Predictions for recurrent-event models.
 * Faster set-up for large data (initial fits on the GPU with automatic differentiation).
 * Tutorial notebook for clinicians.

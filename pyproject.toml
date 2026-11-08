@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jmbayes"
-version = "0.6.0"
+version = "0.7.0"
 description = "Bayesian joint models for longitudinal and time-to-event data: a Python/PyTorch implementation of JMbayes2 (CPU or GPU)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
-authors = [{ name = "Mo Assaf", email = "mormoassaf@gmail.com" }]
+authors = [{ name = "M. Assaf", email = "mormoassaf@gmail.com" }]
 keywords = ["joint models", "survival analysis", "longitudinal data", "Bayesian", "MCMC",
             "JMbayes2", "PyTorch", "GPU", "biostatistics"]
 classifiers = [

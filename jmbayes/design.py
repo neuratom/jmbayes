@@ -140,7 +140,8 @@ class Terms:
                 comps = tuple(n for n, _ in combo)
                 names.append(":".join(comps))
                 info.append(ColumnInfo(comps, tuple(v for f in term for v in f.variables)))
-        return np.column_stack(cols), names, info
+        M = np.column_stack(cols) if cols else np.zeros((len(df), 0))
+        return M, names, info
 
 
 @dataclass(frozen=True)

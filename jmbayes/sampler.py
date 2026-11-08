@@ -45,6 +45,8 @@ def robbins_monro(scale, acc, itv, target=0.45):
 def r_jitter(x: np.ndarray, rng: np.random.Generator, factor=2.0) -> np.ndarray:
     """R's jitter(x, factor) (used by jm_fit() to start each chain)."""
     x = np.asarray(x, float)
+    if x.size == 0:
+        return x.copy()
     flat = x.ravel()
     z = np.ptp(flat)
     if z == 0:
@@ -85,20 +87,43 @@ class JointModelSampler:
         self.W_H, self.W_h = t(md.W_H), t(md.W_h)
         self.log_Pwk = t(md.log_Pwk)
         self.event = t(md.event)
-        # survival rows: one per patient, or one per patient and cause (competing risks)
+        # survival rows: one per patient, or several (competing risks, counting-process
+        # data, recurrent events); self.cr: rows are summed per patient
         self.R = len(md.event)
         self.cr = md.idT is not None
         self.S = md.n_strata
         self.idT = ti(md.row_patient)
-        self.sid_H = ti(np.repeat(md.row_patient, md.GK_k))
+        pt_row = (md.pt_row if getattr(md, "pt_row", None) is not None
+                  else np.repeat(np.arange(self.R), md.GK_k))
+        self.nH = self.R * md.GK_k                          # points of the main integrals
+        self.pt_row = ti(pt_row)
+        self.sid_H = ti(md.row_patient[pt_row])
+        delta = getattr(md, "delta", None)
+        delta = np.asarray(md.event, int) if delta is None else delta
+        self.left = t(delta == 2) > 0 if (delta == 2).any() else None
+        irows = np.where(delta == 3)[0]
+        self.irows = ti(irows) if len(irows) else None
+        self.int_mask = t(delta == 3) > 0 if len(irows) else None
+        # recurrent events: a frailty per patient, scaled by sigmaF on the recurrent
+        # stratum (0) and by sigmaF * alphaF[k - 1] on terminal stratum k
+        self.rec = getattr(md, "recurrent", None) is not None
+        if self.rec:
+            strata = md.strata if md.strata is not None else np.zeros(self.R, int)
+            self.term_h = ti(np.maximum(strata - 1, 0))
+            self.is_term_h = t(strata > 0)
+            self.term_H = ti(np.maximum(strata[pt_row] - 1, 0))
+            self.is_term_H = t(strata[pt_row] > 0)
+            self.any_term = bool((strata > 0).any())
+            self.sigF_scale = t(float(md.priors["sigmaF_mean"])
+                                / float(md.priors["sigmaF_shape"]))
         self.Wlong_bar = t(md.Wlong_bar)
         self.Wlong_isd = 1.0 / t(md.Wlong_sds)
         self.outs = []
         for o in md.outcomes:
             self.outs.append(dict(
                 y=t(o.y), X=t(o.X), Z=t(o.Z), sid=ti(o.sid), fam=o.family, df=o.df,
-                lgy1=(torch.lgamma(t(o.y) + 1.0)
-                      if o.family in ("poisson", "negative_binomial") else None),
+                pre=fam.precompute(o.family, t(o.y),
+                                   None if getattr(o, "aux", None) is None else t(o.aux)),
                 re=ti(o.re_cols), fe=ti(o.fe_cols), re_py=[int(c) for c in o.re_cols],
                 has_sigma=o.has_sigma,
                 # fixed effects outside the hierarchical centering (Metropolis-Hastings)
@@ -150,7 +175,7 @@ class JointModelSampler:
 
     def ll_long_obs(self, j, eta, sigma):
         o = self.outs[j]
-        return fam.log_dens(o["fam"], o["y"], eta, sigma[:, None], o["df"], o["lgy1"])
+        return fam.log_dens(o["fam"], o["y"], eta, sigma[:, None], o["df"], o["pre"])
 
     def ll_long_subj(self, j, eta, sigma):
         o = self.outs[j]
@@ -187,11 +212,27 @@ class JointModelSampler:
         s["WlH_a"] = (s["WlH"] * s["alphas"][:, None, :]).sum(-1)
         s["Wlh_a"] = (s["Wlh"] * s["alphas"][:, None, :]).sum(-1)
 
-    def log_surv(self, W0H_bs, WH_g, WlH_a, W0h_bs, Wh_g, Wlh_a):
-        lam = torch.exp(self.log_Pwk + W0H_bs + WH_g + WlH_a)
-        H = lam.view(lam.shape[0], self.R, self.K).sum(-1)
-        out = -H + self.event * (W0h_bs + Wh_g + Wlh_a)
-        if self.cr:                       # sum each patient's rows (one per cause)
+    def log_surv(self, W0H_bs, WH_g, WlH_a, W0h_bs, Wh_g, Wlh_a, FH=None, Fh=None):
+        """log_surv() in JMbayes2_LogDens.h: per patient, the sum over its rows of
+        -H (right censored, event), + log h (event), log(1 - exp(-H)) (left censored),
+        -H + log(1 - exp(-H2)) (interval censored). FH, Fh: frailty terms."""
+        eta = self.log_Pwk + W0H_bs + WH_g + WlH_a
+        if FH is not None:
+            eta = eta + FH
+        lam = torch.exp(eta)
+        C = lam.shape[0]
+        H = lam[:, :self.nH].reshape(C, self.R, self.K).sum(-1)
+        lh = W0h_bs + Wh_g + Wlh_a
+        if Fh is not None:
+            lh = lh + Fh
+        out = -H + self.event * lh
+        if self.left is not None:
+            out = torch.where(self.left, torch.log(-torch.expm1(-H)), out)
+        if self.irows is not None:
+            H2 = lam[:, self.nH:].reshape(C, -1, self.K).sum(-1)
+            H2f = torch.zeros_like(H).index_copy_(1, self.irows, H2)
+            out = torch.where(self.int_mask, -H + torch.log(-torch.expm1(-H2f)), out)
+        if self.cr:                       # sum each patient's rows
             out = torch.zeros(out.shape[0], self.n, dtype=self.dt,
                               device=self.dev).index_add_(1, self.idT, out)
         return out
@@ -216,15 +257,22 @@ class JointModelSampler:
         x = bs.view(bs.shape[0], self.S, -1)
         return ((x @ self.Tau_bs1) * x).sum(-1)
 
-    def log_prior_surv(self, bs, gammas, alphas, tau_bs):
+    def log_prior_surv(self, bs, gammas, alphas, tau_bs, alphaF=None):
+        """logPrior_surv(); with recurrent events it includes the prior of alphaF (pass
+        alphaF to override the current value)."""
         pr = self.pr
         if self.S > 1:
-            return (-0.5 * (tau_bs * self.bs_quad(bs)).sum(-1)
-                    - 0.5 * self.quad(gammas, pr["mean_gammas"], pr["Tau_gammas"])
-                    - 0.5 * self.quad(alphas, pr["mean_alphas"], pr["Tau_alphas"]))
-        return (-0.5 * tau_bs * self.quad(bs, pr["mean_bs_gammas"], pr["Tau_bs_gammas"])
-                - 0.5 * self.quad(gammas, pr["mean_gammas"], pr["Tau_gammas"])
-                - 0.5 * self.quad(alphas, pr["mean_alphas"], pr["Tau_alphas"]))
+            out = (-0.5 * (tau_bs * self.bs_quad(bs)).sum(-1)
+                   - 0.5 * self.quad(gammas, pr["mean_gammas"], pr["Tau_gammas"])
+                   - 0.5 * self.quad(alphas, pr["mean_alphas"], pr["Tau_alphas"]))
+        else:
+            out = (-0.5 * tau_bs * self.quad(bs, pr["mean_bs_gammas"], pr["Tau_bs_gammas"])
+                   - 0.5 * self.quad(gammas, pr["mean_gammas"], pr["Tau_gammas"])
+                   - 0.5 * self.quad(alphas, pr["mean_alphas"], pr["Tau_alphas"]))
+        if self.rec:
+            aF = self._s["alphaF"] if alphaF is None else alphaF
+            out = out - 0.5 * self.quad(aF, pr["mean_alphaF"], pr["Tau_alphaF"])
+        return out
 
     def lkj(self, L):
         d = torch.diagonal(L, dim1=-2, dim2=-1)[:, 1:]
@@ -245,8 +293,80 @@ class JointModelSampler:
 
     def surv(self, s, **over):
         g = lambda k: over.get(k, s[k])  # noqa: E731
+        if self.rec:
+            return self.log_surv(g("W0H_bs"), g("WH_g"), g("WlH_a"), g("W0h_bs"),
+                                 g("Wh_g"), g("Wlh_a"), g("FH"), g("Fh"))
         return self.log_surv(g("W0H_bs"), g("WH_g"), g("WlH_a"), g("W0h_bs"), g("Wh_g"),
                              g("Wlh_a"))
+
+    # ---- recurrent events: frailty terms
+    def frail_terms(self, frailty, sigmaF, alphaF):
+        """sigmaF * frailty, times alphaF[k - 1] on the rows of terminal stratum k."""
+        fH = frailty[:, self.sid_H] * sigmaF[:, None]
+        fh = frailty[:, self.idT] * sigmaF[:, None]
+        if self.any_term:
+            aH = torch.where(self.is_term_H > 0, alphaF[:, self.term_H], 1.0)
+            ah = torch.where(self.is_term_h > 0, alphaF[:, self.term_h], 1.0)
+            fH, fh = fH * aH, fh * ah
+        return fH, fh
+
+    def update_frailty(self, s, itf, keep):
+        """update_frailty() in JMbayes2_RE.h: per-patient random-walk MH on the
+        standardised frailty (prior N(0, 1)), step sizes adapted from iteration 20."""
+        prop = s["frailty"] + s["sc_frail"] * self._rand(self.C, self.n)
+        FH, Fh = self.frail_terms(prop, s["sigmaF"], s["alphaF"])
+        ll_p = self.surv(s, FH=FH, Fh=Fh)
+        lf_p = -0.5 * LOG2PI - 0.5 * prop * prop
+        lr = ll_p + lf_p - s["ll_surv"] - s["ll_frail"]
+        acc = self.accept(lr)
+        s["frailty"] = torch.where(acc, prop, s["frailty"])
+        s["ll_surv"] = torch.where(acc, ll_p, s["ll_surv"])
+        s["ll_frail"] = torch.where(acc, lf_p, s["ll_frail"])
+        s["sc_frail"] = torch.where(itf > 19, robbins_monro(s["sc_frail"], acc, itf),
+                                    s["sc_frail"])
+        s["FH"], s["Fh"] = self.frail_terms(s["frailty"], s["sigmaF"], s["alphaF"])
+
+    def update_sigmaF(self, s, itf):
+        """update_sigmaF(): log-normal random walk, gamma prior (shape 0.625, mean 0.25)."""
+        pr = self.pr
+        sc, cur = s["sc_sigF"], s["sigmaF"]
+        scale_pr = self.sigF_scale
+        den = s["ll_surv"].sum(-1) + self.log_dgamma(cur, pr["sigmaF_shape"], scale_pr)
+        mu_cur = torch.log(cur) - 0.5 * sc * sc
+        new = torch.exp(mu_cur + sc * self._rand(self.C))
+        FH, Fh = self.frail_terms(s["frailty"], new, s["alphaF"])
+        ll_p = self.surv(s, FH=FH, Fh=Fh)
+        num = ll_p.sum(-1) + self.log_dgamma(new, pr["sigmaF_shape"], scale_pr)
+        mu_new = torch.log(new) - 0.5 * sc * sc
+        lr = num - den + self.log_dlnorm(cur, mu_new, sc) - self.log_dlnorm(new, mu_cur, sc)
+        acc = self.accept(lr)
+        a = acc[:, None]
+        s["sigmaF"] = torch.where(acc, new, cur)
+        s["ll_surv"] = torch.where(a, ll_p, s["ll_surv"])
+        s["FH"] = torch.where(a, FH, s["FH"])
+        s["Fh"] = torch.where(a, Fh, s["Fh"])
+        s["sc_sigF"] = torch.where(itf > 19, robbins_monro(sc, acc, itf), sc)
+
+    def update_alphaF(self, s, itf):
+        """update_alphaF(): one-at-a-time normal random walk, against den_surv."""
+        for i in range(s["alphaF"].shape[1]):
+            diff = s["sc_aF"][:, i] * self._rand(self.C)
+            prop = s["alphaF"].clone()
+            prop[:, i] += diff
+            FH, Fh = self.frail_terms(s["frailty"], s["sigmaF"], prop)
+            ll = self.surv(s, FH=FH, Fh=Fh)
+            num = ll.sum(-1) + self.log_prior_surv(s["bs"], s["gammas"], s["alphas"],
+                                                    s["tau"], alphaF=prop)
+            acc = self.accept(num - s["den_surv"])
+            a = acc[:, None]
+            s["alphaF"] = torch.where(a, prop, s["alphaF"])
+            s["FH"] = torch.where(a, FH, s["FH"])
+            s["Fh"] = torch.where(a, Fh, s["Fh"])
+            s["ll_surv"] = torch.where(a, ll, s["ll_surv"])
+            s["den_surv"] = torch.where(acc, num, s["den_surv"])
+            s["sc_aF"][:, i] = torch.where(itf > 19,
+                                           robbins_monro(s["sc_aF"][:, i], acc, itf),
+                                           s["sc_aF"][:, i])
 
     # ------------------------------------------------------------- state
     def init_state(self, n_iter):
@@ -266,6 +386,13 @@ class JointModelSampler:
         L = np.linalg.cholesky(D / np.outer(sds, sds)).T             # upper, R = L'L
         s["sds"] = self.t(np.tile(sds, (C, 1)))
         s["L"] = self.t(np.tile(L, (C, 1, 1)))
+        self._s = s
+        if self.rec:
+            s["frailty"] = self.t(jit(ini["frailty"]))
+            s["alphaF"] = self.t(jit(ini["alphaF"]))
+            s["sigmaF"] = self.t(jit(ini["sigmaF"]))[:, 0].contiguous()
+            s["FH"], s["Fh"] = self.frail_terms(s["frailty"], s["sigmaF"], s["alphaF"])
+            s["ll_frail"] = -0.5 * LOG2PI - 0.5 * s["frailty"] ** 2
         s["W0H_bs"] = s["bs"] @ self.W0_H.T
         s["W0h_bs"] = s["bs"] @ self.W0_h.T
         s["WH_g"] = s["gammas"] @ self.W_H.T
@@ -286,6 +413,9 @@ class JointModelSampler:
             f(self.A)
         s["sc_sds"], s["sc_L"], s["sc_sig"] = f(self.q), f(len(self.up)), f(self.n_out)
         s["sc_b"] = torch.full((C, self.n, self.q), 0.1, dtype=dt, device=dev)
+        if self.rec:
+            s["sc_frail"] = torch.full((C, self.n), 0.5, dtype=dt, device=dev)
+            s["sc_sigF"], s["sc_aF"] = f(1)[:, 0].contiguous(), f(s["alphaF"].shape[1])
         for j, o in enumerate(self.outs):
             if o["nhc"]:
                 s[f"sc_beta{j}"] = f(len(o["nhc"]))
@@ -297,6 +427,12 @@ class JointModelSampler:
                          r_sigmas=self.n_out).items():
             s[k] = z(n_iter, C, w)
         s["acc_b"], s["sum_b"] = z(C, self.n, self.q), z(C, self.n, self.q)
+        # outer products of b (posterior variances, for the marginal fit statistics)
+        s["sum_bb"] = torch.zeros(C, self.n, self.q, self.q, dtype=torch.float64, device=dev)
+        if self.rec:
+            s["r_sigmaF"], s["r_alphaF"] = z(n_iter, C, 1), z(n_iter, C, s["alphaF"].shape[1])
+            s["sum_frail"] = z(C, self.n)
+            s["r_frailty"] = z(n_iter - self._burnin, C, self.n)
         # fit-statistic running totals stay in float64 whatever the sampling precision:
         # they sum over every kept draw, where float32 rounding would add up
         z64 = lambda *sh: torch.zeros(*sh, dtype=torch.float64, device=dev)  # noqa: E731
@@ -609,6 +745,8 @@ class JointModelSampler:
         """Running fit statistics and random-effect means (after burn-in)."""
         k = keep.to(torch.float64)
         ll = s["ll_long"] + s["ll_surv"] + s["ll_re"]
+        if self.rec:
+            ll = ll + s["ll_frail"]
         x = ll.to(torch.float64)
         s["n_keep"] = s["n_keep"] + k
         s["sum_tot"] = s["sum_tot"] + k * x.sum(-1)
@@ -621,6 +759,7 @@ class JointModelSampler:
 
     # ------------------------------------------------------------- one iteration
     def step(self, s, full, n_burnin):
+        self._s = s                       # current state (log_prior_surv reads alphaF)
         itf = s["it"][0].to(self.dt)
         keep = itf > (n_burnin - 1)
         self.update_vector(s, "bs", "sc_bs", self.W0_H, self.W0_h, "W0H_bs", "W0h_bs", itf)
@@ -632,6 +771,18 @@ class JointModelSampler:
             self.record(s, "r_gammas", s["gammas"])
         self.update_alphas(s, itf)
         self.record(s, "r_alphas", s["alphas"])
+        if self.rec:
+            self.update_frailty(s, itf, keep)
+            self.update_sigmaF(s, itf)
+            s["den_surv"] = s["ll_surv"].sum(-1) + self.log_prior_surv(
+                s["bs"], s["gammas"], s["alphas"], s["tau"])
+            if self.any_term:
+                self.update_alphaF(s, itf)
+            self.record(s, "r_sigmaF", s["sigmaF"][:, None])
+            self.record(s, "r_alphaF", s["alphaF"])
+            s["sum_frail"] = s["sum_frail"] + keep.to(self.dt) * s["frailty"]
+            s["r_frailty"].index_copy_(0, torch.clamp(s["it"] - n_burnin, min=0),
+                                       s["frailty"][None])
         if full:
             self.update_D(s, itf)
             self.update_b(s, itf, keep)
@@ -641,6 +792,9 @@ class JointModelSampler:
             self.update_sigmas(s, itf)
             self.refresh_long(s)
             s["sum_b"] = s["sum_b"] + keep.to(self.dt) * s["b"]
+            b64 = s["b"].to(torch.float64)
+            s["sum_bb"] = s["sum_bb"] + keep.to(torch.float64) * (
+                b64[..., :, None] * b64[..., None, :])
         ll = self.accumulate(s, keep)
         if "r_ll" in s:            # burn-in iterations write row 0, overwritten when kept
             s["r_ll"].index_copy_(0, torch.clamp(s["it"] - n_burnin, min=0), ll[None])
@@ -684,6 +838,7 @@ class JointModelSampler:
         after burn-in (as JMbayes2's save_logLik_contributions). It takes
         (n_iter - n_burnin) x chains x patients numbers of device memory."""
         self._save_ll, self._ll_burnin = save_loglik, n_burnin
+        self._burnin = n_burnin
         s = self.init_state(n_iter)
         t0 = _time.perf_counter()
         graphs = self._capture(s, n_burnin) if self.use_graphs else None
@@ -711,6 +866,13 @@ class JointModelSampler:
         K = n_iter - n_burnin
         out["acc_b"] = (s["acc_b"] / K).cpu().numpy()
         out["mean_b"] = (s["sum_b"] / K).cpu().numpy()
+        out["sum_b"] = s["sum_b"].to(torch.float64).cpu().numpy()
+        out["sum_bb"] = s["sum_bb"].cpu().numpy()
+        if self.rec:
+            out["sigmaF"] = s["r_sigmaF"][sl].cpu().numpy()
+            out["alphaF"] = s["r_alphaF"][sl].cpu().numpy()
+            out["mean_frailty"] = (s["sum_frail"] / K).cpu().numpy()
+            out["frailty"] = s["r_frailty"].cpu().numpy()          # (kept, C, n)
         out["fitstats_acc"] = dict(sum_tot=s["sum_tot"].cpu().numpy(),
                                    mean=s["st_mean"].cpu().numpy(),
                                    m2=s["st_m2"].cpu().numpy(),

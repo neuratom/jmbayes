@@ -41,17 +41,34 @@ def event_causes(col: pd.Series, censored):
 
 def check_patients(patients: pd.DataFrame, id_var: str, time: str, event: str,
                    covariates, what="patients data", censored=None, start=None,
-                   strata=None):
+                   strata=None, time2=None, recurrent=None):
     extra = [c for c in (start, strata) if c]
     _missing_report(patients, [id_var, time, event, *extra, *covariates], what)
     dup = patients[id_var][patients[id_var].duplicated()]
-    if len(dup):
+    if len(dup) and not start:
         raise DataError(f"{what} must have one row per patient; repeated ids: "
-                        f"{_few(dup.unique())}")
+                        f"{_few(dup.unique())} (several rows per patient, e.g. for "
+                        "covariates that change over time, need start= / "
+                        "Surv(start, stop, event))")
     t = patients[time].astype(float)
+    if time2:
+        _check_interval(patients, time, time2, event, what)
+        return
     if (t <= 0).any():
         raise DataError(f"{what}: follow-up time '{time}' must be positive; "
                         f"{int((t <= 0).sum())} rows are <= 0")
+    if start and len(dup) and not recurrent:
+        # counting-process rows of one patient must not overlap
+        d = patients[[id_var, start, time]].astype({start: float, time: float})
+        d = d.sort_values([id_var, start], kind="mergesort")
+        prev = d.groupby(id_var)[time].shift()
+        if (d[start] < prev - 1e-12).any():
+            raise DataError(f"{what}: the intervals ({start}, {time}] of a patient "
+                            "overlap; each row should cover the next stretch of follow-up")
+    if recurrent:
+        lev = pd.unique(patients[strata])
+        if len(lev) < 1:
+            raise DataError(f"{what}: strata column '{strata}' is empty")
     if start:
         if not pd.api.types.is_numeric_dtype(patients[start]):
             raise DataError(f"{what}: entry time '{start}' must be numeric")
@@ -77,17 +94,75 @@ def check_patients(patients: pd.DataFrame, id_var: str, time: str, event: str,
                         "name the causes and pass censored= for competing risks")
 
 
+def _check_interval(patients, time, time2, event, what):
+    code = patients[event]
+    if not set(pd.unique(code)) <= {0, 1, 2, 3}:
+        raise DataError(f"{what}: with time2= the event column '{event}' must be coded "
+                        "0 (right-censored), 1 (event), 2 (left-censored), 3 (interval)")
+    t1 = patients[time].astype(float)
+    if (t1 <= 0).any():
+        raise DataError(f"{what}: '{time}' must be positive")
+    iv = code == 3
+    if iv.any():
+        if time2 not in patients:
+            raise DataError(f"{what}: column '{time2}' not found")
+        t2 = patients.loc[iv, time2].astype(float)
+        if t2.isna().any() or (t2 <= t1[iv]).any():
+            raise DataError(f"{what}: for interval-censored rows ({event} = 3) '{time2}' "
+                            f"must be after '{time}'")
+
+
 def check_visits(visits: pd.DataFrame, id_var: str, time_var: str, markers,
                  what="visits data", require_measured=True):
-    """markers: list of (response, covariate columns, family)."""
-    covs = [c for _, cols, _ in markers for c in cols if c != time_var]
+    """markers: list of (response, covariate columns, family[, aux column])."""
+    markers = [tuple(m) + (None,) * (4 - len(m)) for m in markers]
+    covs = [c for _, cols, _, _ in markers for c in cols if c != time_var]
     _missing_report(visits, [id_var, time_var, *covs], what)
-    for resp, _, family in markers:
+    for resp, _, _, a in markers:         # trials / censoring: needed where measured
+        if isinstance(a, str):
+            if a not in visits:
+                raise DataError(f"{what}: column '{a}' not found")
+            measured = visits[resp.var].notna() if resp.var in visits else True
+            if visits.loc[measured, a].isna().any():
+                raise DataError(f"{what}: '{a}' is missing on rows where '{resp.var}' "
+                                "was measured")
+    for resp, _, family, aux in markers:
         if resp.var not in visits.columns:
             raise DataError(f"{what}: marker column '{resp.var}' not found")
         y = visits[resp.var].dropna()
         if y.empty and require_measured:
             raise DataError(f"{what}: marker '{resp.var}' has no measurements")
+        if family not in ("gaussian", "student_t", "censored_normal", "binomial") and \
+                resp.transform is not None:
+            raise DataError(f"{what}: a {family} marker is modelled on its own scale; "
+                            f"drop the {resp.transform}() transform")
+        if family in ("beta", "unit_lindley", "gamma"):
+            if not pd.api.types.is_numeric_dtype(y):
+                raise DataError(f"{what}: marker '{resp.var}' must be numeric")
+            if family == "gamma" and (y <= 0).any():
+                raise DataError(f"{what}: gamma marker '{resp.var}' must be positive")
+            if family != "gamma" and ((y <= 0) | (y >= 1)).any():
+                raise DataError(f"{what}: {family} marker '{resp.var}' must lie strictly "
+                                "between 0 and 1")
+            continue
+        if family == "censored_normal":
+            c = visits.loc[y.index, aux]
+            if not set(pd.unique(c)) <= {0, 1, 2}:
+                raise DataError(f"{what}: censoring column '{aux}' must be coded 0 "
+                                "(observed), 1 (left-censored) or 2 (right-censored)")
+            continue
+        if family in ("binomial", "beta_binomial") and (aux is not None or
+                                                         family == "beta_binomial"):
+            n = (visits.loc[y.index, aux].astype(float) if isinstance(aux, str)
+                 else pd.Series(1.0 if aux is None else float(aux), index=y.index))
+            if not pd.api.types.is_numeric_dtype(y):
+                raise DataError(f"{what}: marker '{resp.var}' must be the number of "
+                                "successes")
+            if (y < 0).any() or (np.round(y) != y).any() or (y > n).any() or \
+                    (np.round(n) != n).any():
+                raise DataError(f"{what}: {family} marker '{resp.var}' must be whole "
+                                "numbers between 0 and the number of trials")
+            continue
         if family in ("poisson", "negative_binomial"):
             if not pd.api.types.is_numeric_dtype(y):
                 raise DataError(f"{what}: count marker '{resp.var}' must be numeric")

@@ -27,9 +27,11 @@ Miranda Afonso: the same model, the same priors and the same MCMC algorithm.
 * **Competing risks and prediction accuracy.** Cause-specific hazards as in JMbayes2,
   and time-dependent AUC, ROC, Brier score and calibration that reproduce JMbayes2's
   numbers.
-* **Count and outlier-robust markers, strata and late entry.** Poisson, negative
-  binomial and Student's t markers, stratified baseline hazards and delayed entry, each
-  tested against JMbayes2.
+* **The marker types and survival data of JMbayes2.** Gaussian, binomial (with trials),
+  Poisson, negative binomial, Student's t, beta, gamma, censored normal, beta-binomial and
+  unit Lindley markers; strata, late entry, covariates that change over time, interval
+  censoring and recurrent events with a frailty; marginal and conditional DIC, WAIC and
+  LPML. Each tested against JMbayes2.
 * **A Python interface**, plus JMbayes2-style formula strings if you prefer them.
 
 ## Install
@@ -234,7 +236,7 @@ JMbayes2 0.6-5's own `predict()` fails on this model, so the cumulative incidenc
 checked internally: summed over causes they match the overall risk. As in JMbayes2, the
 accuracy measures above are for single-event models only.
 
-## Counts, outliers, strata and late entry
+## More marker types and survival data
 
 **Marker types.** Besides `"gaussian"` and `"binomial"`, a marker can be:
 
@@ -242,18 +244,30 @@ accuracy measures above are for single-event models only.
 jmb.Marker("seizures", fixed=year, random=year, family="poisson")            # counts
 jmb.Marker("platelets", fixed=year, random=year, family="negative_binomial") # overdispersed counts
 jmb.Marker("prothrombin", fixed=year, random=year, family="student_t", df=4) # robust to outliers
+jmb.Marker("serBilir", fixed=year, random=year, family="gamma")              # positive, skewed
+jmb.Marker("fraction", fixed=year, random=year, family="beta")               # in (0, 1)
+jmb.Marker("fraction", fixed=year, random=year, family="unit_lindley")       # in (0, 1)
+jmb.Marker("viral_load", fixed=year, random=year, family="censored_normal",
+           censoring="below_limit")       # 0 measured, 1 below the limit, 2 above
+jmb.Marker("n_positive", fixed=year, family="binomial", trials="n_tested")   # k out of n
+jmb.Marker("n_positive", fixed=year, family="beta_binomial", trials=3)       # overdispersed
 ```
 
-Counts use a log link, so `value(marker)` in the hazard is the log of the expected count.
-Student's t needs its degrees of freedom (`df`), as in JMbayes2. In
-`fit.coefficients(...)`, `sigma` is the size of a negative binomial marker (variance
-mu + mu²/size) and the scale of a Student's t marker.
+Count and gamma markers use a log link, beta, unit Lindley and the binomial families a
+logit link, so `value(marker)` in the hazard is on that scale (e.g. the log of the
+expected count). Student's t needs its degrees of freedom (`df`), as in JMbayes2.
+`trials` (a column or a number) gives the number of trials of each measurement, as
+`cbind(successes, failures)` in R. In `fit.coefficients(...)`, `sigma` is the size of a
+negative binomial marker (variance mu + mu²/size), the scale of a Student's t marker, the
+precision of beta and beta-binomial markers, and the shape of a gamma marker.
 
 **Strata.** Each group gets its own baseline hazard; covariate and marker effects are
-shared (like `strata(drug)` in R):
+shared (like `strata(drug)` in R), or, with `by_strata=True`, also estimated per group
+(like `sex:strata(drug)` and `value(x):drug`):
 
 ```python
 jmb.Event("years", "status2", sex, strata="drug")
+jmb.Event("years", "status2", sex, strata="drug", by_strata=True)
 ```
 
 **Late entry (left truncation).** When patients join the study some time after their
@@ -264,28 +278,67 @@ counts as at risk only from entry on (like `Surv(entry, years, status2)` in R):
 jmb.Event("years", "status2", sex, start="entry")
 ```
 
-As JMbayes2 does for this model, the hazard is then integrated with a 7-point rule. To
-predict for a new patient, `newdata` needs the entry (and strata) column too.
+**Covariates that change over time.** Give one row per interval in the patients data
+(counting-process form, `Surv(start, stop, event)` in R), with the covariate values that
+hold during each interval and the event on the last row:
 
-**Tested against JMbayes2.** Two models, each fitted in both programs with two seeds
-(12 chains of 30,000 iterations), using the same equivalence tests as above:
+```python
+jmb.Event("tstop", "status2", sex + var("edema"), start="tstart")
+```
 
-| Model | Parameters equivalent (±0.1 SD) | Shown to differ | MCMC time, JMbayes2 → jmbayes |
-|---|---|---|---|
-| Strata (drug) + late entry; log bilirubin and prothrombin | 47 / 47 | 0 | 29 min → 2.2 min (13×) |
-| Negative binomial platelets, Poisson bilirubin count, Student's t (df 4) prothrombin | 50 / 50 | 0 | 65 min → 2.6 min (25×) |
+**Interval censoring.** When the event is only known to have happened between two
+visits, code the event column 0 (right-censored at `time`), 1 (event at `time`),
+2 (left-censored: before `time`) or 3 (between `time` and `time2`), as
+`Surv(time, time2, event, type = "interval")` in R:
 
-For the second model both programs started from the same separate fits (R's), because
-GLMMadaptive's Student's t fit of prothrombin does not converge properly and jm() centres
-some priors on it. Scripts: `benchmark/run_ext.py`, `run_ext_R.R`, `compare_cr.py`.
+```python
+jmb.Event("time", "status", sex, time2="time2")
+```
+
+**Recurrent events.** For events that can happen again (hospitalisations, relapses),
+possibly with a terminal event, as `jm(..., recurrent = "gap")` in JMbayes2: one row per
+risk interval, a strata column whose first level is the recurrent event and the others
+terminal events, and a frailty per patient shared by both processes. `jmb.rc_setup()`
+builds such data from a recurrent-event table and a terminal-event table, as JMbayes2's
+`rc_setup()`:
+
+```python
+data = jmb.rc_setup(recurrent, terminal, start="tstart", stop="tstop")
+event = jmb.Event("tstop", "status", var("group") + var("age"), start="tstart",
+                  strata="strata", by_strata=True, recurrent="gap")   # or "calendar"
+```
+
+`fit.survival_table()` then also shows the frailty SD (`sigma_frailty`) and its effect on
+each terminal event (`frailty:T1`).
+
+**Competing risks** combine with late entry and strata: each cause then has a baseline
+hazard per stratum, as `strata(CRdrug)` with an interaction of cause and stratum in R.
+
+With late entry or several rows per patient the hazard is integrated with a 7-point
+rule, as JMbayes2 does. To predict for a new patient, `newdata` needs the entry (and
+strata) column too; covariates that change over time are taken from the last row.
+Predictions are not available for recurrent-event models (nor in JMbayes2).
+
+**Tested against JMbayes2.** Each model fitted in both programs with two seeds, using
+the same equivalence tests as above:
+
+RESULTS_07
+
+For the families models both programs started from the same separate fits (R's), because
+some of GLMMadaptive's fits stop short of the maximum (Student's t of prothrombin; the
+censored normal fit by a wide margin) and jm() centres some priors on them. GLMMadaptive
+0.9 does not offer the unit Lindley family, so that one is checked against its density
+only. Scripts: `benchmark/run_ext.py`, `run_ext_R.R`, `run_ext2_R.R`, `compare_cr.py`.
 
 ## Your own data
 
 You need two pandas data frames, as in JMbayes2:
 
 * **visits** (one row per measurement): patient id, visit time, markers, covariates
-* **patients** (one row per patient): the same id, follow-up time, event (0/1, or the
-  cause for competing risks), covariates, and optionally an entry time or a strata column
+* **patients** (one row per patient, or per risk interval for covariates that change
+  over time and for recurrent events): the same id, follow-up time, event (0/1, the cause
+  for competing risks, or 0-3 for interval censoring), covariates, and optionally an entry
+  time or a strata column
 
 ```python
 import pandas as pd
@@ -321,10 +374,14 @@ model.fit(visits, patients,
           n_iter=12000, n_burnin=2000, n_thin=5,     # MCMC length (default 3500 / 500 / 1)
           n_chains=3,                                # more chains are cheap on a GPU
           device="cpu",                              # default: GPU if available
-          save_loglik=True)                          # keep the per-patient table (below)
+          save_loglik=True,                          # keep the per-patient table (below)
+          marginal_stats=False)                      # skip the marginal DIC/WAIC/LPML
 ```
 
-DIC, WAIC and LPML are always computed, from running totals, so jmbayes does not need to
+`fit.fit_statistics` holds the conditional DIC, WAIC and LPML and
+`fit.marginal_fit_statistics` the marginal ones (random effects integrated out with a
+Laplace approximation, as JMbayes2; use these to compare models). Both are computed from
+running totals, so jmbayes does not need to
 keep each patient's log-likelihood at every iteration (the table that makes JMbayes2's
 memory grow). If you want that table, for example for PSIS-LOO with its Pareto-k
 diagnostic, pass `save_loglik=True`: `fit.loglik` is then an array of
@@ -335,9 +392,11 @@ chains × iterations × patients (patients in the order of `fit.patient_ids`). I
 Check convergence in `fit.survival_table()`: `Rhat` should be below about 1.05. If not,
 run longer or with more chains.
 
-Not supported yet (you get a clear error): other marker families (beta, gamma, censored
-normal, ...), interval censoring, recurrent events, survival covariates that change over
-time, and strata or late entry combined with competing risks.
+Not supported yet (you get a clear error): the velocity, acceleration, coefs and Delta
+functional forms and transformation functions; time-varying coefficients (`tv()`);
+multi-state models; case weights; other baseline-hazard bases; shrinkage priors; interval
+censoring or recurrent events combined with late entry or competing risks; and
+predictions for recurrent-event models.
 
 ## Prefer R formulas?
 
@@ -353,7 +412,11 @@ fit = jmb.jm(
     functional_forms="~ value(log(serBilir)) + slope(log(serBilir))")
 ```
 
-Late entry and strata are written as in R: `"Surv(entry, years, status2) ~ sex + strata(drug)"`.
+Survival data are written as in R: `"Surv(entry, years, status2) ~ sex + strata(drug)"`
+(late entry, strata), `"Surv(tstart, tstop, status2) ~ sex + edema"` (several rows per
+patient), `"Surv(time, time2, status, type = 'interval') ~ sex"` (interval censoring),
+`"Surv(tstart, tstop, status) ~ (group + age):strata(strata)"` (effects per stratum;
+add `recurrent="gap"` to `Survival(...)` for recurrent events).
 
 ## How it works
 

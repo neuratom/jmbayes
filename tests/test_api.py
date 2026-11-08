@@ -44,7 +44,7 @@ def test_api_tables(short_fit, tmp_path):
 def test_helpful_errors(pbc2_data):
     pbc2, pid = pbc2_data
     with pytest.raises(NotImplementedError):
-        jmb.Longitudinal("serBilir ~ year", random="~ year | id", family="gamma")
+        jmb.Longitudinal("serBilir ~ year", random="~ year | id", family="inverse_gaussian")
     with pytest.raises(NotImplementedError):
         jmb.api.parse_functional_forms("~ velocity(y)", ["y"])
     assert jmb.Longitudinal("serBilir ~ year", random="~ year || id").uncorrelated

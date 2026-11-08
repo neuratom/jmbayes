@@ -22,7 +22,9 @@ from jmbayes.api import (Event, JointModel, JointModelFit, Longitudinal, Marker,
                             jm, load)
 from jmbayes.checks import DataError
 from jmbayes.design import bs, ns, var
+from jmbayes.setup import rc_setup
 
 __all__ = ["JointModel", "Marker", "Event", "var", "ns", "bs",
-           "jm", "Longitudinal", "Survival", "JointModelFit", "load", "datasets", "DataError"]
-__version__ = "0.6.0"
+           "jm", "Longitudinal", "Survival", "JointModelFit", "load", "datasets", "DataError",
+           "rc_setup"]
+__version__ = "0.7.0"

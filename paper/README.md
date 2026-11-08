@@ -11,7 +11,7 @@
 2. Fill in the form:
    * **Title:** jmbayes: fast, memory-efficient, data-parallel Bayesian joint models for
      longitudinal and time-to-event data
-   * **Authors:** Mo Assaf
+   * **Authors:** M. Assaf
    * **Abstract:** copy it from `main.tex`, without the LaTeX commands (it is about 1,700
      characters; arXiv's limit is 1,920)
    * **Primary category:** stat.CO (Statistics - Computation)

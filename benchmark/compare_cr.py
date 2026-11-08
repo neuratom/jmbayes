@@ -1,13 +1,14 @@
 """Equivalence of jmbayes and JMbayes2 for the extension models (same test as the main
 report): competing risks, and the 0.6 additions.
 
-Usage: python compare_cr.py [cr|surv|fam]   (default cr)
-Inputs: R_<model>_seed123.json, R_<model>_seed456.json (run_cr_R.R / run_ext_R.R) and
-PY_<model>_seed123.json, PY_<model>_seed456.json (run_cr.py / run_ext.py), 12 chains x
-30,000 iterations per run.
-  cr:   PBC, death and transplantation as competing events
-  surv: delayed entry and a baseline hazard per treatment arm
-  fam:  negative binomial, Poisson and Student's t markers
+Usage: python compare_cr.py [model]   (default cr)
+Inputs: R_<model>_seed123.json, R_<model>_seed456.json (run_cr_R.R / run_ext_R.R /
+run_ext2_R.R) and PY_<model>_seed123.json, PY_<model>_seed456.json (run_cr.py /
+run_ext.py).
+  cr:   PBC, death and transplantation as competing events (12 x 30,000 iterations)
+  surv: delayed entry and a baseline hazard per treatment arm (12 x 30,000)
+  fam:  negative binomial, Poisson and Student's t markers (12 x 30,000)
+  0.7 models (8 x 15,000): tvc, icens, crx, rec, fam2, fam3, bystr (see run_ext.py)
 Prints the summary and writes <model>_equivalence.json.
 """
 import json
@@ -88,6 +89,11 @@ def main(model="cr"):
         R_vs_R=dict(median=float(np.median(d_rr)), max=float(d_rr.max())),
         Py_vs_Py=dict(median=float(np.median(d_pp)), max=float(d_pp.max())),
         hazard_ratios=hr, parameters=cmp,
+        fit_stats={kind: {prog: {k: float(np.mean([r[kind][k] for r in runs]))
+                                 for k in ("DIC", "pD", "WAIC", "LPML")}
+                          for prog, runs in (("R", R), ("Python", P))}
+                   for kind in ("fit_stats", "fit_stats_marginal")
+                   if all(kind in r for r in R + P)},
         mcmc_time=dict(R=[r["mcmc_time"] for r in R], Python=[p["mcmc_time"] for p in P]))
     (HERE / f"{model}_equivalence.json").write_text(json.dumps(out, indent=1))
     print(f"{out['equivalent_0_2']}/{len(cmp)} equivalent at +-0.2 SD, "
@@ -103,6 +109,9 @@ def main(model="cr"):
     for c in worst:
         print(f"  largest: {c['name']:30s} d = {c['d_sd']:+.3f} SD  "
               f"equiv@0.2 {c['equiv_0.2']}")
+    for kind, v in out["fit_stats"].items():
+        print(f"  {kind:20s} " + "  ".join(
+            f"{k} R {v['R'][k]:.1f} / Py {v['Python'][k]:.1f}" for k in ("DIC", "WAIC", "LPML")))
     print("MCMC time (s):", out["mcmc_time"])
 
 

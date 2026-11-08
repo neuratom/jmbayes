@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy import optimize
+from scipy.special import expit
 
 from jmbayes.families import has_sigma, np_loglik, np_score_weight
 
@@ -67,9 +68,10 @@ def _gh_grid(q: int, k: int):
 
 
 class _GLMM:
-    def __init__(self, y, X, Z, sid, n_agq=11, diagonal=False, family="binomial", df=0.0):
+    def __init__(self, y, X, Z, sid, n_agq=11, diagonal=False, family="binomial", df=0.0,
+                 aux=None):
         self.y, self.X, self.Z, self.sid = y, X, Z, sid
-        self.family, self.df = family, df
+        self.family, self.df, self.aux = family, df, aux
         self.n_phi = int(has_sigma(family))                # log size / log scale
         self.n = sid.max() + 1
         self.p, self.q = X.shape[1], Z.shape[1]
@@ -95,7 +97,7 @@ class _GLMM:
         xb = self.X @ beta
         for _ in range(100):
             eta = xb + np.einsum("ij,ij->i", self.Z, b[self.sid])
-            sc, w = np_score_weight(self.family, self.y, eta, phi, self.df)
+            sc, w = np_score_weight(self.family, self.y, eta, phi, self.df, self.aux)
             g = np.zeros((self.n, self.q))
             np.add.at(g, self.sid, -self.Z * sc[:, None])
             g += b @ Dinv
@@ -106,7 +108,7 @@ class _GLMM:
                 break
         # curvature at the final mode
         eta = xb + np.einsum("ij,ij->i", self.Z, b[self.sid])
-        _, w = np_score_weight(self.family, self.y, eta, phi, self.df)
+        _, w = np_score_weight(self.family, self.y, eta, phi, self.df, self.aux)
         return b, self._curv(w) + Dinv
 
     def negloglik(self, theta, update_modes=False):
@@ -127,7 +129,7 @@ class _GLMM:
         A = np.linalg.cholesky(np.linalg.inv(H))                 # (n, q, q)
         bk = b[:, None, :] + np.sqrt(2) * np.einsum("nij,kj->nki", A, self.nodes)
         eta = (self.X @ beta)[:, None] + np.einsum("ij,ikj->ik", self.Z, bk[self.sid])
-        ll_obs = np_loglik(self.family, self.y, eta, phi, self.df)
+        ll_obs = np_loglik(self.family, self.y, eta, phi, self.df, self.aux)
         ll = np.zeros((self.n, len(self.log_w)))
         np.add.at(ll, self.sid, ll_obs)
         quad = np.einsum("nki,ij,nkj->nk", bk, Dinv, bk)
@@ -143,11 +145,28 @@ class _GLMM:
         return out if np.isfinite(out) else 1e300
 
 
-def _glm_start(family, y, X):
+def _glm_start(family, y, X, aux=None):
     """Fixed effects and log extra parameter of the model without random effects."""
     import statsmodels.api as sm
-    if family == "binomial":
-        return sm.GLM(y, X, family=sm.families.Binomial()).fit().params, []
+    if family in ("binomial", "beta_binomial"):
+        n = np.ones_like(y) if aux is None else aux
+        beta = sm.GLM(np.column_stack([y, n - y]), X,
+                      family=sm.families.Binomial()).fit().params
+        return beta, ([] if family == "binomial" else [np.log(10.0)])
+    if family in ("beta", "unit_lindley"):
+        z = np.log(y) - np.log1p(-y)
+        beta = np.linalg.lstsq(X, z, rcond=None)[0]
+        if family == "unit_lindley":
+            return beta, []
+        mu = expit(X @ beta)
+        v = max(np.mean((y - mu) ** 2), 1e-8)
+        return beta, [np.log(np.clip(np.mean(mu * (1 - mu)) / v - 1.0, 0.1, 1e4))]
+    if family == "gamma":
+        beta = np.linalg.lstsq(X, np.log(y), rcond=None)[0]
+        r = y / np.exp(X @ beta)
+        beta[0] += np.log(np.mean(r))
+        r = r / np.mean(r)
+        return beta, [np.log(np.clip(1.0 / max(np.var(r), 1e-8), 1e-2, 1e4))]
     if family in ("poisson", "negative_binomial"):
         beta = sm.GLM(y, X, family=sm.families.Poisson()).fit().params
         if family == "poisson":
@@ -155,20 +174,21 @@ def _glm_start(family, y, X):
         mu = np.exp(X @ beta)
         excess = max(np.mean((y - mu) ** 2 - mu), 1e-3 * np.mean(mu))
         return beta, [np.log(np.clip(np.mean(mu) ** 2 / excess, 1e-3, 1e3))]
-    beta = np.linalg.lstsq(X, y, rcond=None)[0]                  # student_t
+    beta = np.linalg.lstsq(X, y, rcond=None)[0]       # student_t, censored_normal
     return beta, [np.log(np.std(y - X @ beta))]
 
 
 def fit_glmm(y, X, Z, groups, family="binomial", df=0.0, n_agq=11,
-             diagonal=False) -> MixedFit:
+             diagonal=False, aux=None) -> MixedFit:
     """GLMM by maximum likelihood (adaptive Gauss-Hermite, 11 points per random effect).
     log_sigma is GLMMadaptive's 'phis': the log size (negative binomial) or log scale
     (Student's t); -20 when the family has no extra parameter (R convention)."""
     uniq = list(dict.fromkeys(groups))
     index = {g: i for i, g in enumerate(uniq)}
     sid = np.array([index[g] for g in groups])
-    m = _GLMM(y.astype(float), X, Z, sid, n_agq, diagonal, family, df)
-    beta0, phi0 = _glm_start(family, y.astype(float), X)
+    aux = None if aux is None else np.asarray(aux, float)
+    m = _GLMM(y.astype(float), X, Z, sid, n_agq, diagonal, family, df, aux)
+    beta0, phi0 = _glm_start(family, y.astype(float), X, aux)
     theta0 = np.concatenate([beta0, phi0, np.zeros(len(m.tril[0]))])
     m.negloglik(theta0, update_modes=True)
     best = None
@@ -244,3 +264,52 @@ def fit_coxph(time, event, W, strata=None, start=None) -> np.ndarray:
         if np.abs(step).max() < 1e-10:
             break
     return beta
+
+
+# ---------------------------------------------------------------------------
+# Weibull model for interval-censored data (survreg(), as JMbayes2 expects for
+# Surv(time, time2, event, type = "interval")); gammas = -coef / scale
+# ---------------------------------------------------------------------------
+
+def fit_weibull_interval(T_left, T_right, delta, W) -> np.ndarray:
+    """Weibull accelerated failure time model by maximum likelihood. delta: 0 right
+    censored at T_right, 1 event at T_right, 2 left censored at T_left, 3 interval
+    censored in [T_left, T_right]. Returns the proportional-hazards coefficients
+    -beta / scale, as jm() takes from a survreg() fit."""
+    from scipy.special import log_expit  # noqa: F401
+    t1 = np.where(delta >= 2, T_left, T_right)
+    t2 = T_right
+    X = np.column_stack([np.ones(len(t1)), W])
+    lt1 = np.log(np.where(t1 > 0, t1, 1.0))
+    lt2 = np.log(np.where(t2 > 0, t2, 1.0))
+
+    def logS(z):                 # log survival of the standard extreme-value variable
+        return -np.exp(z)
+
+    def nll(th):
+        beta, ls = th[:-1], th[-1]
+        sc = np.exp(ls)
+        lp = X @ beta
+        z1 = (lt1 - lp) / sc
+        z2 = (lt2 - lp) / sc
+        out = np.zeros(len(t1))
+        e = delta == 1
+        out[e] = z1[e] - np.exp(z1[e]) - ls - lt1[e]
+        r = delta == 0
+        out[r] = logS(z1[r])
+        lf = delta == 2
+        out[lf] = np.log(-np.expm1(logS(z1[lf])))
+        it = delta == 3
+        # log(S(t1) - S(t2)) = log S(t1) + log(1 - exp(log S(t2) - log S(t1)))
+        out[it] = logS(z1[it]) + np.log(-np.expm1(logS(z2[it]) - logS(z1[it])))
+        v = -out.sum()
+        return v if np.isfinite(v) else 1e300
+
+    pos = np.concatenate([t1[t1 > 0], t2[t2 > 0]])
+    th0 = np.zeros(X.shape[1] + 1)
+    th0[0] = np.log(pos.mean())
+    res = optimize.minimize(nll, th0, method="BFGS", options={"gtol": 1e-8, "maxiter": 2000})
+    res = optimize.minimize(nll, res.x, method="Nelder-Mead",
+                            options={"xatol": 1e-10, "fatol": 1e-12, "maxiter": 20000})
+    beta, sc = res.x[:-1], np.exp(res.x[-1])
+    return -beta[1:] / sc
