@@ -83,7 +83,8 @@ def ext_table():
            r"differ: parameters whose difference is shown to exceed 0.2 posterior SD (two "
            r"one-sided tests at 5\%). Difference: between a JMbayes2 run and a jmbayes run, "
            r"per parameter, in units of its posterior SD (median and largest over the "
-           r"parameters). Equivalence counts per model are in Table~\ref{tab:extdetail}.}"
+           r"parameters). Equivalence counts per model are in Table~\ref{tab:extdetail}; "
+           r"Section~\ref{sec:multi} repeats the comparison with 30 runs per program.}"
            r"\label{tab:ext}\\",
            head + r" \endfirsthead", head + r" \endhead", r"\bottomrule \endlastfoot"]
     for key, label in MODELS:

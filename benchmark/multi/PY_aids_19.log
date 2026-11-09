@@ -1,0 +1,3 @@
+C:\Users\mo\Documents\Organisations\Neuratom\Repos\JMbayes2\jmbayes\fits.py:51: ConvergenceWarning: The Hessian matrix at the estimated parameter values is not positive definite.
+  r = model.fit(reml=True, method=method, free=free,
+done: MCMC 63.2s

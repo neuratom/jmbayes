@@ -369,6 +369,24 @@ markers are nearly confounded (their random intercepts correlate at 0.98). The l
 rows use other data sets that ship with JMbayes2. Timings are not given because these
 runs shared the machine; see the benchmark above for speed.
 
+**Repeated runs, with statistical power.** Two runs per program leave slow-mixing
+parameters inconclusive, so each program was also run 30 times (seeds 1-30, 8 chains x
+15,000 iterations) on each of three data sets. Per parameter, the 30 + 30 posterior means
+and SDs were compared: Welch and Kolmogorov-Smirnov tests for a difference
+(Benjamini-Hochberg corrected) and two one-sided tests for equivalence.
+
+| Data set | Parameters | Mean equivalent (±0.1 / ±0.05 SD) | SD equivalent (±10%) | Shown to differ | 80% power |
+|---|---|---|---|---|---|
+| PBC (312 patients, 3 markers) | 50 | 50 / 43 | 50 | 0 | 50 |
+| AIDS (467 patients) | 22 | 22 / 22 | 22 | 0 | 22 |
+| Liver cirrhosis (488 patients) | 22 | 22 / 22 | 22 | 0 | 22 |
+
+Every parameter was shown equivalent, and none differed after correction. Before
+correction 9 of 94 means had p < 0.05 (about 5 expected by chance); the largest
+difference was 0.048 posterior SD, less than the run-to-run SD of a single run. Both
+programs had the same run-to-run spread. Scripts: `benchmark/run_multi_all.sh`,
+`run_multi_R.R`, `multi_compare.py`.
+
 Two bugs in jmbayes were found by these comparisons and fixed: lgamma-difference
 densities (beta-binomial, negative binomial, beta, gamma) lost precision in float32 at
 large dispersions, and statsmodels' L-BFGS could stop at a poor optimum of the separate

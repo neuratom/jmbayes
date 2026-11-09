@@ -1,15 +1,16 @@
 \begin{table}[t]
 \centering
 \small
-\caption{Run-distribution comparison: each program run 2 times per data set with different seeds (8 chains of 15,000 iterations). Per parameter, the posterior means and SDs of the jmbayes runs are compared with those of the JMbayes2 runs. Differ: number of parameters with $p < 0.05$ in Welch's $t$-test (posterior mean, SD) or the two-sample Kolmogorov--Smirnov test (run distribution of the posterior mean); in brackets, after Benjamini--Hochberg correction at 5\% FDR. About 5\% of parameters are expected below 0.05 by chance when the programs are identical. Equivalent: shown equivalent by two one-sided tests, within $\pm 0.1$ posterior SD (mean) or $\pm 10\%$ (SD).}\label{tab:multi}
+\caption{Repeated-runs comparison: each program run 30 times per data set with different seeds (8 chains of 15,000 iterations). Per parameter, the 30 posterior means and SDs from jmbayes are compared with the 30 from JMbayes2. Shown equivalent: two one-sided Welch tests at 5\%, for the posterior mean within $\pm 0.1$ and $\pm 0.05$ posterior SD, and for the posterior SD within $\pm 10\%$. Shown to differ: Welch's $t$-test (mean, SD) and the two-sample Kolmogorov--Smirnov test (whole run distribution of the posterior mean), after Benjamini--Hochberg correction at 5\% false discovery rate. 80\% power: parameters for which 30 runs per program give at least 80\% power to show equivalence of the mean within $\pm 0.1$ SD.}\label{tab:multi}
 \vspace{4pt}
-\begin{tabular}{lrrrrrrr}
-\toprule & Runs & & \multicolumn{2}{c}{Posterior mean} & \multicolumn{2}{c}{Posterior SD} & Run distribution \\
-\cmidrule(lr){4-5}\cmidrule(lr){6-7}\cmidrule(lr){8-8}
-Data set & R / Py & Parameters & Differ & Equivalent & Differ & Equivalent & Differ \\ \midrule
-PBC (312 patients, 3 markers) & 2 / 2 & 50 & 1 (0) & 18 & 0 (0) & 20 & 0 (0) \\
-AIDS (467 patients) & 2 / 2 & 22 & 3 (0) & 14 & 1 (0) & 22 & 0 (0) \\
-Liver cirrhosis (488 patients) & 2 / 2 & 22 & 2 (1) & 17 & 0 (0) & 18 & 0 (0) \\
+\begin{tabular}{lrrrrrrrr}
+\toprule & & \multicolumn{3}{c}{Shown equivalent} & \multicolumn{3}{c}{Shown to differ} & \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+& & \multicolumn{2}{c}{Mean} & SD & & & Run & 80\% \\
+Data set & Param. & $\pm 0.1$ & $\pm 0.05$ & $\pm 10\%$ & Mean & SD & distr. & power \\ \midrule
+PBC (312 patients, 3 markers) & 50 & 50 & 43 & 50 & 0 & 0 & 0 & 50 \\
+AIDS (467 patients) & 22 & 22 & 22 & 22 & 0 & 0 & 0 & 22 \\
+Liver cirrhosis (488 patients) & 22 & 22 & 22 & 22 & 0 & 0 & 0 & 22 \\
 \bottomrule
 \end{tabular}
 \end{table}

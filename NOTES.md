@@ -175,6 +175,13 @@ All 21 extension models were run in both programs (8 chains x 15,000 iterations,
 * Rscript reads its script while running: editing run_ext3_R.R during the runs broke two
   runs at the end (wts 456, ms 123); they were rerun.
 
+Repeated runs (2026-11-09): 30 runs per program, seeds 1-30, of the main PBC model, aids
+and prothro (benchmark/multi/, run_multi_all.sh + run_multi_more*.sh, multi_compare.py).
+All 94 parameters equivalent (mean within 0.1 SD, posterior SD within 10%), 87 also within
+0.05 SD; 0 differ after BH; 30 runs give >= 80% power for every parameter (most demanding
+needed 22). Raw p < 0.05 for 9/94 means (largest |d| 0.048 SD). Run-to-run SD equal in
+both programs. These runs overlapped each other, so their timings are not benchmarks.
+
 12. **jmbayes, fixed in 0.8: separate linear mixed model at a poor optimum.** On the aids
    data statsmodels' L-BFGS reported convergence at REML log-likelihood -4305.7, against
    -3566.8 at R's lme() solution (random slope variance 8.55 vs 0.030). The priors centred

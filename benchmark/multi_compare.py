@@ -105,6 +105,7 @@ def compare(model):
             d_mean_sd=float((pm.mean() - rm.mean()) / sd),
             p_mean=float(stats.ttest_ind(pm, rm, equal_var=False).pvalue),
             eq_mean=bool(welch_tost(pm, rm, MARGIN_MEAN * sd) < ALPHA),
+            eq_mean_05=bool(welch_tost(pm, rm, 0.05 * sd) < ALPHA),
             sd_ratio=float(ps.mean() / rs.mean()),
             p_sd=float(stats.ttest_ind(ps, rs, equal_var=False).pvalue),
             eq_sd=bool(welch_tost(ps, rs, MARGIN_SD * rs.mean()) < ALPHA),
@@ -121,6 +122,7 @@ def compare(model):
         mean_p05=sum(r["p_mean"] < ALPHA for r in rows),
         mean_bh=sum(r["p_mean_bh"] for r in rows),
         mean_equiv=sum(r["eq_mean"] for r in rows),
+        mean_equiv_05=sum(r["eq_mean_05"] for r in rows),
         sd_p05=sum(r["p_sd"] < ALPHA for r in rows),
         sd_bh=sum(r["p_sd_bh"] for r in rows),
         sd_equiv=sum(r["eq_sd"] for r in rows),
@@ -159,30 +161,32 @@ def main():
         for r in bad[:8]:
             print(f"    {r['name']:40s} d={r['d_mean_sd']:+.3f} SD  p={r['p_mean']:.3g} "
                   f"eq={r['eq_mean']}  sd ratio {r['sd_ratio']:.3f} p_sd={r['p_sd']:.3g}")
-        tex.append(f"{label} & {s['runs_R']} / {s['runs_Py']} & {n} & "
-                   f"{s['mean_p05']} ({s['mean_bh']}) & {s['mean_equiv']} & "
-                   f"{s['sd_p05']} ({s['sd_bh']}) & {s['sd_equiv']} & "
-                   f"{s['ks_p05']} ({s['ks_bh']}) \\\\")
+        powered = n - s["underpowered"]
+        tex.append(f"{label} & {n} & {s['mean_equiv']} & {s['mean_equiv_05']} & "
+                   f"{s['sd_equiv']} & {s['mean_bh']} & {s['sd_bh']} & {s['ks_bh']} & "
+                   f"{powered} \\\\")
     (D / "summary.json").write_text(json.dumps(out, indent=1))
-    head = (r"\toprule & Runs & & \multicolumn{2}{c}{Posterior mean} & "
-            r"\multicolumn{2}{c}{Posterior SD} & Run distribution \\"
-            "\n" r"\cmidrule(lr){4-5}\cmidrule(lr){6-7}\cmidrule(lr){8-8}"
-            "\n" r"Data set & R / Py & Parameters & Differ & Equivalent & Differ & "
-            r"Equivalent & Differ \\ \midrule")
+    runs = max([v["summary"]["runs_R"] for v in out.values()] or [0])
+    head = (r"\toprule & & \multicolumn{3}{c}{Shown equivalent} & "
+            r"\multicolumn{3}{c}{Shown to differ} & \\" "\n"
+            r"\cmidrule(lr){3-5}\cmidrule(lr){6-8}" "\n"
+            r"& & \multicolumn{2}{c}{Mean} & SD & & & Run & 80\% \\" "\n"
+            r"Data set & Param. & $\pm 0.1$ & $\pm 0.05$ & $\pm 10\%$ & Mean & SD & "
+            r"distr. & power \\ \midrule")
+    cap = (r"\caption{Repeated-runs comparison: each program run " + str(runs) +
+           r" times per data set with different seeds (8 chains of 15,000 iterations). "
+           r"Per parameter, the " + str(runs) + r" posterior means and SDs from jmbayes "
+           r"are compared with the " + str(runs) + r" from JMbayes2. Shown equivalent: two "
+           r"one-sided Welch tests at 5\%, for the posterior mean within $\pm 0.1$ and "
+           r"$\pm 0.05$ posterior SD, and for the posterior SD within $\pm 10\%$. Shown to "
+           r"differ: Welch's $t$-test (mean, SD) and the two-sample Kolmogorov--Smirnov "
+           r"test (whole run distribution of the posterior mean), after "
+           r"Benjamini--Hochberg correction at 5\% false discovery rate. 80\% power: "
+           r"parameters for which " + str(runs) + r" runs per program give at least 80\% "
+           r"power to show equivalence of the mean within $\pm 0.1$ SD.}\label{tab:multi}")
     (HERE.parent / "paper" / "multi_table.tex").write_text(
-        "\\begin{table}[t]\n\\centering\n\\small\n"
-        "\\caption{Run-distribution comparison: each program run " + str(
-            max([v['summary']['runs_R'] for v in out.values()] or [0])) +
-        " times per data set with different seeds (8 chains of 15,000 iterations). Per "
-        "parameter, the posterior means and SDs of the jmbayes runs are compared with those "
-        "of the JMbayes2 runs. Differ: number of parameters with $p < 0.05$ in Welch's "
-        "$t$-test (posterior mean, SD) or the two-sample Kolmogorov--Smirnov test (run "
-        "distribution of the posterior mean); in brackets, after Benjamini--Hochberg "
-        "correction at 5\\% FDR. About 5\\% of parameters are expected below 0.05 by "
-        "chance when the programs are identical. Equivalent: shown equivalent by two "
-        "one-sided tests, within $\\pm 0.1$ posterior SD (mean) or $\\pm 10\\%$ "
-        "(SD).}\\label{tab:multi}\n\\vspace{4pt}\n"
-        "\\begin{tabular}{lrrrrrrr}\n" + head + "\n" + "\n".join(tex) +
+        "\\begin{table}[t]\n\\centering\n\\small\n" + cap + "\n\\vspace{4pt}\n"
+        "\\begin{tabular}{lrrrrrrrr}\n" + head + "\n" + "\n".join(tex) +
         "\n\\bottomrule\n\\end{tabular}\n\\end{table}\n")
 
 

@@ -22,7 +22,7 @@ We present \textbf{jmbayes}, a data-parallel reimplementation of the R package J
 a widely used tool for Bayesian joint models of longitudinal and time-to-event data. It
 fits the same model, with the same priors and the same Markov chain Monte Carlo (MCMC)
 algorithm, and gives empirically equivalent results: the same estimates, within
-Monte Carlo error, shown by formal equivalence tests. On the largest problem we tested it was
+Monte Carlo error. On the largest problem we tested it was
 10$\times$ faster with 27$\times$ less memory, and the gap grew with problem size. For 3,120 patients and 90,000 iterations, JMbayes2 took
 104 minutes and 37.8~GB of RAM; jmbayes took 11 minutes and 1.4~GB. jmbayes's memory stayed at
 1.3--1.4~GB of RAM and under 0.2~GB of GPU memory in every run, up to 90,000 iterations,
@@ -36,8 +36,9 @@ primary biliary cholangitis (PBC) data, all 50 model parameters agreed with JMba
 0.2 posterior standard deviations, and the two programs differed from each other less than
 two JMbayes2 runs with different random seeds. jmbayes covers JMbayes2's model options
 (10 marker families, competing risks, multi-state and recurrent events, interval
-censoring, all functional forms); in 21 further models on three data sets, no parameter
-was shown to differ. jmbayes is open source (GPL-3.0),
+censoring, all functional forms); in 21 further models no parameter was shown to
+differ, and in 30 repeated runs per program on three data sets every parameter was shown
+equivalent. jmbayes is open source (GPL-3.0),
 installable with \texttt{pip install jmbayes}, and available with all scripts at
 \url{https://github.com/neuratom/jmbayes}.
 \end{abstract}
@@ -397,6 +398,33 @@ JMbayes2 against itself run with another seed (blue) and JMbayes2 against jmbaye
 from itself.}
 \label{fig:hrscatter}
 \end{figure}
+\paragraph{Repeated runs.}\label{sec:multi} Two runs per program can show a parameter
+equivalent only where the chains mix quickly; elsewhere the result stays inconclusive. To
+test equivalence with known statistical power, we ran each program 30 times on each of
+the three data sets, with different seeds (the main PBC model and the AIDS and cirrhosis
+models above, 8 chains of 15,000 iterations each). The runs are independent, so the spread
+of their posterior means is the Monte Carlo error itself, and two-sample tests on the
+30 + 30 runs need no assumptions about autocorrelation within chains. For each
+parameter we tested whether the two programs' posterior means and posterior SDs differ
+(Welch's $t$-test, and a Kolmogorov--Smirnov test of the whole distribution of the run
+means), with Benjamini--Hochberg correction across parameters, and whether they are
+equivalent (two one-sided tests).
+
+All 94 parameters were shown equivalent, in their posterior mean within $\pm 0.1$
+posterior SD and in their posterior SD within $\pm 10\%$; 87 were also shown
+equivalent within the stricter $\pm 0.05$ SD (Table~\ref{tab:multi}). No parameter was
+shown to differ after correction. Before correction, 9 of the 94 means had
+$p < 0.05$, where about 5 are expected by chance; with 30 runs per
+program the tests detect very small differences, and the largest was 0.048 posterior
+SD, less than the run-to-run SD of a single run of either program. That spread was the same
+in both programs (median 0.052 and 0.047 posterior SD for PBC,
+0.020 and 0.021 for AIDS, 0.015 and
+0.013 for cirrhosis, JMbayes2 first), so jmbayes mixes as well as
+JMbayes2. From the observed spread, 30 runs per program gave at least 80\% power to show
+equivalence within $\pm 0.1$ SD for every parameter (the most demanding needed 22).
+
+\input{multi_table.tex}
+
 The comparisons also found an error in jmbayes: for markers whose density is a difference of
 large log-gamma terms (beta-binomial, negative binomial, beta and gamma), 32-bit rounding
 exceeded the signal at large dispersions, and the beta-binomial dispersion drifted
