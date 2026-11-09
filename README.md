@@ -58,7 +58,7 @@ pip install --no-deps jmbayes
 ```
 
 **From source** (for the benchmarks, or to change the code): `git clone
-https://github.com/neuratom/jmbayes.git`, then `pip install -e .` in that folder.
+https://github.com/neuratomic/jmbayes.git`, then `pip install -e .` in that folder.
 
 conda-forge picks a GPU build of PyTorch by itself when it finds an NVIDIA driver.
 
@@ -109,12 +109,12 @@ default. All runs were on one machine, one run at a time:
 | GPU | NVIDIA GeForce RTX 3090, 24 GB |
 | Software | Windows 11; R 4.6.2 with JMbayes2 0.6-5; Python 3.11, PyTorch 2.6 (CUDA 12.4) |
 
-![MCMC time and peak RAM of JMbayes2 and jmbayes](https://raw.githubusercontent.com/neuratom/jmbayes/main/benchmark/figures/benchmarks.png)
+![MCMC time and peak RAM of JMbayes2 and jmbayes](https://raw.githubusercontent.com/neuratomic/jmbayes/main/benchmark/figures/benchmarks.png)
 
 The two programs agree. Hazard ratios from the same model, fitted by each program
 (posterior mean and 95% credible interval):
 
-![Hazard ratios from JMbayes2 and jmbayes](https://raw.githubusercontent.com/neuratom/jmbayes/main/benchmark/figures/forest.png)
+![Hazard ratios from JMbayes2 and jmbayes](https://raw.githubusercontent.com/neuratomic/jmbayes/main/benchmark/figures/forest.png)
 
 | Patients | Iterations | JMbayes2: MCMC time | JMbayes2: peak RAM | jmbayes: MCMC time | jmbayes: peak RAM | Speed-up |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -143,11 +143,11 @@ the CPU version faster as well. It is planned.
 
 jmbayes computes in float32 by default; `fit(..., dtype="float64")` gives 64-bit precision.
 The results are statistically the same: both are equivalent to JMbayes2 in the same tests
-([float64 report](https://github.com/neuratom/jmbayes/blob/main/benchmark/jmbayes_float64_vs_JMbayes2.pdf)).
+([float64 report](https://github.com/neuratomic/jmbayes/blob/main/benchmark/jmbayes_float64_vs_JMbayes2.pdf)).
 
 The full report, with equivalence tests, hazard ratios, credible intervals, convergence
-(Rhat) and scaling plots, is in [benchmark/jmbayes_vs_JMbayes2.pdf](https://github.com/neuratom/jmbayes/blob/main/benchmark/jmbayes_vs_JMbayes2.pdf).
-The scripts that reproduce it are in [benchmark/](https://github.com/neuratom/jmbayes/tree/main/benchmark). The R scripts need
+(Rhat) and scaling plots, is in [benchmark/jmbayes_vs_JMbayes2.pdf](https://github.com/neuratomic/jmbayes/blob/main/benchmark/jmbayes_vs_JMbayes2.pdf).
+The scripts that reproduce it are in [benchmark/](https://github.com/neuratomic/jmbayes/tree/main/benchmark). The R scripts need
 JMbayes2 installed from CRAN, and are only used for the comparison.
 
 ## Writing terms
@@ -190,7 +190,7 @@ fit.predict(new, process="longitudinal")          # expected marker values
 To predict, the patient's random effects are sampled given their data so far. jmbayes
 does this step slightly differently from JMbayes2, which we believe weights the
 "event-free so far" information inconsistently (details in
-[NOTES.md](https://github.com/neuratom/jmbayes/blob/main/NOTES.md)). Risks can differ
+[NOTES.md](https://github.com/neuratomic/jmbayes/blob/main/NOTES.md)). Risks can differ
 from JMbayes2's by a few percentage points for some patients (up to 0.07 for PBC
 patient 93). `fit.predict(..., r_sampling=True)` uses JMbayes2's method; given the same
 posterior draws, it matches JMbayes2's predictions to within 0.01.
@@ -234,7 +234,7 @@ own baseline hazard, covariate effects and marker associations. `fit.predict(...
 each cause's cumulative incidence (column `cause`). For death and transplantation in PBC,
 none of the 50 parameters differed from JMbayes2 in the same equivalence tests, and the
 hazard ratios agreed to two decimals
-([benchmark/compare_cr.py](https://github.com/neuratom/jmbayes/blob/main/benchmark/compare_cr.py)).
+([benchmark/compare_cr.py](https://github.com/neuratomic/jmbayes/blob/main/benchmark/compare_cr.py)).
 JMbayes2 0.6-5's own `predict()` fails on this model, so the cumulative incidences were
 checked internally: summed over causes they match the overall risk. As in JMbayes2, the
 accuracy measures above are for single-event models only.
@@ -536,7 +536,7 @@ proposals, adaptive tuning and priors. What changes is how it runs:
   log-likelihood table is never stored. That table is what makes JMbayes2's memory grow.
 
 Implementation notes, including places where we found JMbayes2's behaviour questionable,
-are in [NOTES.md](https://github.com/neuratom/jmbayes/blob/main/NOTES.md).
+are in [NOTES.md](https://github.com/neuratomic/jmbayes/blob/main/NOTES.md).
 
 ## Citation
 

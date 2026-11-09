@@ -9,7 +9,7 @@
 Before you start:
 
 * **Make the GitHub repository public.** The abstract links to
-  https://github.com/neuratom/jmbayes, and arXiv requires links to code to resolve
+  https://github.com/neuratomic/jmbayes, and arXiv requires links to code to resolve
   publicly. (On 2026-11-09 the link gave 404 to a visitor who is not signed in.)
 * **Endorsement.** A first submission to a category needs an endorsement. Since January
   2026 the automatic route needs both an academic email address and a prior paper in the
@@ -29,12 +29,12 @@ Then:
 2. Fill in the form:
    * **Title:** jmbayes: fast, memory-efficient, data-parallel Bayesian joint models for
      longitudinal and time-to-event data
-   * **Authors:** M. Assaf (Neuratom)
+   * **Authors:** M. Assaf (Neuratomic)
    * **Abstract:** paste `arxiv_abstract.txt` (the form accepts ASCII only)
    * **Primary category:** stat.CO (Statistics - Computation)
    * **Cross-lists:** stat.ME (Methodology), cs.MS (Mathematical Software)
    * **Comments:** the page, figure and table counts of the final PDF, then
-     "Code: https://github.com/neuratom/jmbayes"
+     "Code: https://github.com/neuratomic/jmbayes"
    * **Licence:** CC BY 4.0 is the usual choice for open work (the choice cannot be
      changed later)
 3. Check the PDF arXiv builds before the final step; until it is announced you can still

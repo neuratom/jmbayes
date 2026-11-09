@@ -28,9 +28,9 @@ classifiers = [
 dependencies = ["numpy", "scipy", "pandas", "statsmodels", "torch"]
 
 [project.urls]
-Homepage = "https://github.com/neuratom/jmbayes"
-Repository = "https://github.com/neuratom/jmbayes"
-Issues = "https://github.com/neuratom/jmbayes/issues"
+Homepage = "https://github.com/neuratomic/jmbayes"
+Repository = "https://github.com/neuratomic/jmbayes"
+Issues = "https://github.com/neuratomic/jmbayes/issues"
 "JMbayes2 (R)" = "https://github.com/drizopoulos/JMbayes2"
 
 [project.optional-dependencies]
